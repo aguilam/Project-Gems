@@ -1,0 +1,68 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id               Int       @id @default(autoincrement())
+  telegramId       Int       @unique
+  userName         String
+  systemPrompt     String
+  defaultModelId   Int
+  defaultModel     AIModel   @relation(fields: [defaultModelId], references: [id])
+  premium          Boolean   @default(false)
+  freeQuestions    Int
+  premiumQuestions Int
+  createdAt        DateTime  @default(now())
+  chats            Chat[]
+  Messages         Message[]
+}
+
+model Chat {
+  id        Int       @id @default(autoincrement())
+  title     String
+  users     User[]
+  messages  Message[]
+  type      Boolean
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model AIModel {
+  id          Int       @id @default(autoincrement())
+  name        String
+  systemName  String
+  description String?
+  premium     Boolean
+  tags        String[]
+  provider    String[]
+  Message     Message[]
+  User        User[]
+}
+
+model Message {
+  id        Int         @id @default(autoincrement())
+  chat      Chat        @relation(fields: [chatId], references: [id])
+  chatId    Int
+  sender    User        @relation(fields: [senderId], references: [id])
+  senderId  Int
+  role      MessageRole
+  content   String
+  model     AIModel?    @relation(fields: [modelId], references: [id])
+  modelId   Int?
+  replyTo   Message?    @relation("MessageReplies", fields: [replyToId], references: [id])
+  replyToId Int?
+  replies   Message[]   @relation("MessageReplies")
+  createdAt DateTime    @default(now())
+}
+
+enum MessageRole {
+  user
+  assistant
+  system
+}
