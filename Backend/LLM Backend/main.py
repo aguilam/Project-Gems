@@ -4,6 +4,7 @@ import httpx
 import os
 from dotenv import load_dotenv
 from groq import Groq
+from fastapi.responses import Response
 
 load_dotenv()
 
@@ -34,13 +35,13 @@ async def llm_query(request: LLMRequest):
     prodiver = request.provider
     if "cerebras" in prodiver and request.premium == True:
         return await query_cerebras(request)
-    elif prodiver == "groq":
+    elif "groq" in prodiver:
         return await query_groq(request)
-    elif prodiver == "mistral":
+    elif  "mistral" in prodiver:
         return await query_mistral(request)
-    elif prodiver == "openrouter":
+    elif  "openrouter" in prodiver:
         return await query_openrouter(request)
-    elif prodiver == "cloudflare":
+    elif  "cloudflare" in prodiver:
         return await query_cloudflare(request)
 
 
@@ -70,7 +71,6 @@ async def query_mistral(request: LLMRequest):
         if resp.status_code != 200:
             raise HTTPException(status_code=resp.status_code, detail=resp.text)
         data = resp.json()
-        print(data)
         return data["choices"][0]["message"]["content"]
 
 
@@ -102,16 +102,33 @@ async def query_openrouter(request: LLMRequest):
 
 
 async def query_cloudflare(request: LLMRequest):
-    url = f"https://api.cloudflare.com/client/v4/accounts/5054130e5a7ddf582ed30bdae4809a82/ai/run/@{request.model}"
+    url = (
+      f"https://api.cloudflare.com/client/v4/accounts/"
+      f"5054130e5a7ddf582ed30bdae4809a82/ai/run/@{request.model}"
+    )
     headers = {"Authorization": f"Bearer {CLOUDFLARE_API_KEY}"}
-    payload = {
-        "prompt": request.prompt,
-    }
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(url, json=payload, headers=headers)
+    payload = {"prompt": request.prompt}
+
+    timeout = httpx.Timeout(
+        connect=60.0,  # время на установку соединения
+        read=120.0,    # время на чтение ответа
+        write=60.0,    # время на отправку запроса
+        pool=5.0       # время ожидания свободного соединения в пуле
+    )
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
+            resp = await client.post(url, json=payload, headers=headers)
+        except httpx.ReadTimeout:
+            raise HTTPException(504, detail="Upstream Read Timeout: модель не успела ответить за отведённое время")
+        except httpx.RequestError as e:
+            raise HTTPException(502, detail=f"Upstream Request Error: {e}")
+
         if resp.status_code != 200:
             raise HTTPException(status_code=resp.status_code, detail=resp.text)
-        return resp.json()
+
+        raw_bytes = await resp.aread()
+        media_type = resp.headers.get("content-type", "application/octet-stream")
+        return Response(content=raw_bytes, media_type=media_type)
 
 
 async def query_cerebras(request: LLMRequest):

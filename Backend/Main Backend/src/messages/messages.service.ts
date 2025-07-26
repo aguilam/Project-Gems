@@ -35,14 +35,17 @@ export class MessagesService {
         },
       });
 
+      if (!model) {
+        throw new Error('Пользователь не найден');
+      }
+
       const response = await axios.post('http://127.0.0.1:8000/llm', {
         prompt: dto.prompt,
-        model: model?.systemName,
-        provider: model?.provider,
+        model: model.systemName,
+        provider: model.provider,
         premium: user.premium,
         systemPrompt: user.systemPrompt,
       });
-
       const userMessage = await this.prisma.message.create({
         data: {
           chatId: chat.id,
@@ -57,11 +60,18 @@ export class MessagesService {
           chatId: chat.id,
           senderId: user.id,
           role: 'ASSISTANT',
-          content: response.data || '',
+          content: model.tags.includes('image')
+            ? Buffer.from(response.data).toString('base64')
+            : response.data,
           replyToId: userMessage.id,
         },
       });
-      return response.data;
+
+      console.log(response);
+      return {
+        content: response.data,
+        type: model.tags.includes('image') ? 'image' : 'text',
+      };
     } catch (error) {
       throw new Error(error);
     }

@@ -1,9 +1,10 @@
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery, BufferedInputFile
 import aiohttp
 import asyncio
 import os
+import base64
 
 from dotenv import load_dotenv
 
@@ -63,10 +64,6 @@ async def fetch_models() -> list[dict]:
             return await resp.json()
 
 async def fetch_user(telegram_id: int) -> dict:
-    """
-    Получаем данные пользователя по пути /user/:telegramId,
-    где :telegramId — числовой параметр пути.
-    """
     async with aiohttp.ClientSession() as session:
         async with session.get(f"{API_URL}/user/{telegram_id}") as resp:
             resp.raise_for_status()
@@ -124,8 +121,14 @@ async def message_to_llm(message: types.Message):
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(f"{API_URL}/messages", json=data) as resp:
-                result = await resp.text()
-                await message.answer(f"{result}")
+                data = await resp.json()
+                msg_type = data.get("type")
+                content  = data.get("content", "")
+                if msg_type == 'image':
+                    img_bytes = await resp.read()  
+                    photo = BufferedInputFile(img_bytes, filename="gen.png")
+                    await bot.send_photo(message.chat.id, photo)
+                return await message.answer(content)
     except aiohttp.ClientError as e:
         await message.answer(f"Ошибка подключения к серверу: {e}")
 
