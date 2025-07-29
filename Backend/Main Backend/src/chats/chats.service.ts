@@ -2,7 +2,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
 
-export class Chat {
+export interface Chat {
   id: number;
   title?: string;
 }
@@ -30,6 +30,15 @@ export class ChatsService {
     });
     return chats;
   }
+
+  async getChatById(chatId: number) {
+    const chat = await this.prisma.chat.findUnique({
+      where: { id: chatId },
+    });
+
+    return chat;
+  }
+
   async deleteChat(id: number) {
     const chat = await this.prisma.chat.delete({
       where: { id },

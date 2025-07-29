@@ -4,7 +4,8 @@ import httpx
 import os
 from dotenv import load_dotenv
 from groq import Groq
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse
+import base64
 
 load_dotenv()
 
@@ -37,11 +38,11 @@ async def llm_query(request: LLMRequest):
         return await query_cerebras(request)
     elif "groq" in prodiver:
         return await query_groq(request)
-    elif  "mistral" in prodiver:
+    elif "mistral" in prodiver:
         return await query_mistral(request)
-    elif  "openrouter" in prodiver:
+    elif "openrouter" in prodiver:
         return await query_openrouter(request)
-    elif  "cloudflare" in prodiver:
+    elif "cloudflare" in prodiver:
         return await query_cloudflare(request)
 
 
@@ -56,7 +57,12 @@ async def query_groq(request: LLMRequest):
         model=request.model,
     )
 
-    return {"text": chat_completion.choices[0]}
+    return JSONResponse(
+        content={
+            "type": "text",
+            "content": chat_completion["choices"][0]["message"]["content"],
+        }
+    )
 
 
 async def query_mistral(request: LLMRequest):
@@ -71,7 +77,12 @@ async def query_mistral(request: LLMRequest):
         if resp.status_code != 200:
             raise HTTPException(status_code=resp.status_code, detail=resp.text)
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        return JSONResponse(
+            content={
+                "type": "text",
+                "content": data["choices"][0]["message"]["content"],
+            }
+        )
 
 
 async def query_huggingface(request: LLMRequest):
@@ -96,30 +107,39 @@ async def query_openrouter(request: LLMRequest):
     }
     async with httpx.AsyncClient() as client:
         resp = await client.post(url, json=payload, headers=headers)
+        response = resp.json()
         if resp.status_code != 200:
             raise HTTPException(status_code=resp.status_code, detail=resp.text)
-        return resp.json()
+        JSONResponse(
+            content={
+                "type": "text",
+                "content": response["choices"][0]["message"]["content"],
+            }
+        )
 
 
 async def query_cloudflare(request: LLMRequest):
     url = (
-      f"https://api.cloudflare.com/client/v4/accounts/"
-      f"5054130e5a7ddf582ed30bdae4809a82/ai/run/@{request.model}"
+        f"https://api.cloudflare.com/client/v4/accounts/"
+        f"5054130e5a7ddf582ed30bdae4809a82/ai/run/@{request.model}"
     )
     headers = {"Authorization": f"Bearer {CLOUDFLARE_API_KEY}"}
     payload = {"prompt": request.prompt}
 
     timeout = httpx.Timeout(
-        connect=60.0,  # время на установку соединения
-        read=120.0,    # время на чтение ответа
-        write=60.0,    # время на отправку запроса
-        pool=5.0       # время ожидания свободного соединения в пуле
+        connect=60.0,
+        read=120.0,
+        write=60.0,
+        pool=5.0,
     )
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             resp = await client.post(url, json=payload, headers=headers)
         except httpx.ReadTimeout:
-            raise HTTPException(504, detail="Upstream Read Timeout: модель не успела ответить за отведённое время")
+            raise HTTPException(
+                504,
+                detail="Upstream Read Timeout: модель не успела ответить за отведённое время",
+            )
         except httpx.RequestError as e:
             raise HTTPException(502, detail=f"Upstream Request Error: {e}")
 
@@ -127,8 +147,9 @@ async def query_cloudflare(request: LLMRequest):
             raise HTTPException(status_code=resp.status_code, detail=resp.text)
 
         raw_bytes = await resp.aread()
-        media_type = resp.headers.get("content-type", "application/octet-stream")
-        return Response(content=raw_bytes, media_type=media_type)
+
+        encoded = base64.b64encode(raw_bytes).decode("ascii")
+        return JSONResponse(content={"type": "image", "content": encoded})
 
 
 async def query_cerebras(request: LLMRequest):
@@ -146,6 +167,12 @@ async def query_cerebras(request: LLMRequest):
     }
     async with httpx.AsyncClient() as client:
         resp = await client.post(url, json=payload, headers=headers)
+        response = resp.json()
         if resp.status_code != 200:
             raise HTTPException(status_code=resp.status_code, detail=resp.text)
-        return resp.json()
+        return JSONResponse(
+            content={
+                "type": "text",
+                "content": response["choices"][0]["message"]["content"],
+            }
+        )

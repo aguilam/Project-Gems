@@ -1,5 +1,10 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
-import { Injectable } from '@nestjs/common';
+import {
+  Injectable,
+  ForbiddenException,
+  HttpException,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import axios from 'axios';
 import { PrismaService } from 'prisma/prisma.service';
 import { ChatsService } from 'src/chats/chats.service';
@@ -36,7 +41,17 @@ export class MessagesService {
       });
 
       if (!model) {
-        throw new Error('Пользователь не найден');
+        throw new Error('Модель не найдена');
+      }
+
+      if (model.premium && (!user.premium || user.premiumQuestions <= 0)) {
+        throw new ForbiddenException('Пользователь не обладает premium');
+      }
+
+      if (!model.premium && user.freeQuestions <= 0) {
+        throw new ForbiddenException(
+          'У пользователя закончились бесплатные вопросы',
+        );
       }
 
       const response = await axios.post('http://127.0.0.1:8000/llm', {
@@ -46,6 +61,7 @@ export class MessagesService {
         premium: user.premium,
         systemPrompt: user.systemPrompt,
       });
+
       const userMessage = await this.prisma.message.create({
         data: {
           chatId: chat.id,
@@ -55,25 +71,50 @@ export class MessagesService {
         },
       });
 
+      const responseData: { content: string; type: string } = response.data;
+
       await this.prisma.message.create({
         data: {
           chatId: chat.id,
           senderId: user.id,
           role: 'ASSISTANT',
-          content: model.tags.includes('image')
-            ? Buffer.from(response.data).toString('base64')
-            : response.data,
+          content: responseData.content,
           replyToId: userMessage.id,
         },
       });
 
-      console.log(response);
+      if (model.premium) {
+        await this.prisma.user.update({
+          where: {
+            telegramId: dto.telegramId,
+          },
+          data: {
+            premiumQuestions: user.premiumQuestions - 1,
+          },
+        });
+      } else {
+        await this.prisma.user.update({
+          where: {
+            telegramId: dto.telegramId,
+          },
+          data: {
+            freeQuestions: user.freeQuestions - 1,
+          },
+        });
+      }
+
       return {
-        content: response.data,
-        type: model.tags.includes('image') ? 'image' : 'text',
+        content: responseData.content,
+        type: responseData.type,
       };
     } catch (error) {
-      throw new Error(error);
+      if (error instanceof HttpException) {
+        throw error;
+      }
+
+      throw new InternalServerErrorException(
+        'Внутренняя ошибка сервера, попробуйте позже',
+      );
     }
   }
 }

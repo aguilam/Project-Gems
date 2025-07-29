@@ -6,6 +6,8 @@ import { UsersModule } from './users/users.module';
 import { MessagesModule } from './messages/messages.module';
 import { ChatsModule } from './chats/chats.module';
 import { ModelsModule } from './models/models.module';
+import { ScheduleModule } from '@nestjs/schedule';
+import { sheduledEventsService } from './sheduledEvents/sheduledEvents.service';
 @Module({
   imports: [
     PrismaModule,
@@ -13,8 +15,9 @@ import { ModelsModule } from './models/models.module';
     MessagesModule,
     ChatsModule,
     ModelsModule,
+    ScheduleModule.forRoot(),
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService, sheduledEventsService],
 })
 export class AppModule {}
