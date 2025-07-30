@@ -8,7 +8,14 @@ from fastapi.responses import JSONResponse
 import base64
 import textract
 import tempfile
-
+from io import BytesIO
+from openpyxl import load_workbook
+from pdfminer.pdfpage import PDFPage
+from pdfminer.high_level import extract_text_to_fp
+from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
+from pdfminer.converter import TextConverter
+from pdfminer.layout import LAParams
+import io
 
 load_dotenv()
 
@@ -36,11 +43,13 @@ class LLMRequest(BaseModel):
 
 class OcrRequest(BaseModel):
     imageBase64: str
-    
+
+
 class FileRequest(BaseModel):
-    buffer: str 
+    buffer: str
     name: str
     mime: str
+
 
 @app.post("/llm")
 async def llm_query(request: LLMRequest):
@@ -79,33 +88,71 @@ async def ocr_query(req: OcrRequest):
     )
     return chat_completion.choices[0].message.content
 
+
 @app.post("/files")
-async  def files_recognize(req: FileRequest):
-    try:
-        file_bytes = base64.b64decode(req.buffer)
-    except Exception as e:
-        return {"error": "Invalid Base64", "detail": str(e)}
+async def files_recognize(req: FileRequest):
+    data = base64.b64decode(req.buffer)
+
     ext = req.name.rsplit(".", 1)[-1].lower()
-    suffix = f".{ext}" if ext else ""
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            tmp.write(file_bytes)
-            tmp_path = tmp.name
-        raw = textract.process(tmp_path)
-        text = raw.decode("utf-8", errors="ignore")
 
-    except Exception as e:
-        return {"error": "Processing failed", "detail": str(e)}
+    if ext == "pdf":
+        rsrcmgr = PDFResourceManager()
+        laparams = LAParams()
+        retstr = io.StringIO()
+        device = TextConverter(rsrcmgr, retstr, laparams=laparams)
+        interpreter = PDFPageInterpreter(rsrcmgr, device)
 
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+        fp = BytesIO(data)
+        fp.seek(0)
 
+        total_text = ""
+        for page in PDFPage.get_pages(fp, check_extractable=False):
+            interpreter.process_page(page)
+            page_text = retstr.getvalue()
+            retstr.truncate(0)
+            retstr.seek(0)
+
+            remaining = 3000 - len(total_text)
+            total_text += page_text[:remaining]
+            if len(total_text) >= 3000:
+                break
+
+            device.close()
+            retstr.close()
+            fp.close()
+            return total_text
+    elif ext in ("xls", "xlsx"):
+        wb = load_workbook(filename=BytesIO(data), read_only=True)
+        parts = []
+        for ws in wb.worksheets:
+            parts.append(f"=== Sheet: {ws.title} ===")
+            for row in ws.iter_rows(values_only=True):
+                line = "\t".join("" if c is None else str(c) for c in row)
+                parts.append(line)
+        text = "\n".join(parts)
+
+    else:
+        ext = req.name.rsplit(".", 1)[-1].lower()
+        suffix = f".{ext}" if ext else ""
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp.write(data)
+                tmp_path = tmp.name
+            raw = textract.process(tmp_path)
+            text = raw.decode("utf-8", errors="ignore")
+
+        except Exception as e:
+            return {"error": "Processing failed", "detail": str(e)}
+
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
     return text
+
 
 async def query_groq(request: LLMRequest):
     chat_completion = await groqClient.chat.completions.create(
