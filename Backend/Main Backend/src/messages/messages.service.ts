@@ -8,17 +8,28 @@ import {
 import axios from 'axios';
 import { PrismaService } from 'prisma/prisma.service';
 import { ChatsService } from 'src/chats/chats.service';
+import { fileRecognizeService } from 'src/fileUpload/fileRecognize.service';
+import { OcrService } from 'src/ocr/ocr.service';
+
+export interface FileDTO {
+  buffer: string;
+  name: string;
+  mime: string;
+}
 
 export class MessageDTO {
   telegramId: number;
   prompt: string;
+  image?: string;
+  file?: FileDTO;
 }
-
 @Injectable()
 export class MessagesService {
   constructor(
     private prisma: PrismaService,
     private chatsService: ChatsService,
+    private ocrService: OcrService,
+    private fileRecognizeService: fileRecognizeService,
   ) {}
 
   async sentUserMessage(dto: MessageDTO) {
@@ -28,6 +39,18 @@ export class MessagesService {
           telegramId: dto.telegramId,
         },
       });
+
+      let ocrResult = '';
+      if (dto.image) {
+        ocrResult = await this.ocrService.imageOcr(dto.image);
+      }
+
+      let fileRecognizeResult = '';
+      if (dto.file) {
+        fileRecognizeResult = await this.fileRecognizeService.recognize(
+          dto.file,
+        );
+      }
       const chat = await this.chatsService.createChat(user?.id);
 
       if (!user) {
@@ -54,8 +77,17 @@ export class MessagesService {
         );
       }
 
+      let fullPrompt = '';
+      if (ocrResult) {
+        fullPrompt = `${ocrResult}\n\n${dto.prompt}`;
+      } else if (fileRecognizeResult) {
+        fullPrompt = `${fileRecognizeResult}\n\n${dto.prompt}`;
+      } else {
+        fullPrompt = dto.prompt;
+      }
+
       const response = await axios.post('http://127.0.0.1:8000/llm', {
-        prompt: dto.prompt,
+        prompt: fullPrompt,
         model: model.systemName,
         provider: model.provider,
         premium: user.premium,
@@ -67,7 +99,7 @@ export class MessagesService {
           chatId: chat.id,
           senderId: user.id,
           role: 'USER',
-          content: dto.prompt,
+          content: fullPrompt,
         },
       });
 

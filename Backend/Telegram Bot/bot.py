@@ -1,4 +1,4 @@
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import (
     InlineKeyboardButton,
@@ -11,6 +11,7 @@ from aiohttp import ClientError
 import asyncio
 import os
 import base64
+from io import BytesIO
 
 from dotenv import load_dotenv
 
@@ -130,6 +131,8 @@ async def on_model_selected(callback: CallbackQuery):
 
 @dp.message(lambda m: m.text is not None and not m.text.startswith("/"))
 async def message_to_llm(message: types.Message):
+    photo: types.PhotoSize = message.photo[-1]
+
     payload = {"telegramId": message.from_user.id, "prompt": message.text}
 
     async with aiohttp.ClientSession() as session:
@@ -142,10 +145,10 @@ async def message_to_llm(message: types.Message):
                         err = await resp.json()
                         err_msg = err.get("message", text)
                     except Exception:
-                        err_msg = text  
+                        err_msg = text
 
                     await message.answer({err_msg})
-                    return 
+                    return
 
                 data = await resp.json()
                 if data.get("type") == "image":
@@ -158,6 +161,77 @@ async def message_to_llm(message: types.Message):
 
         except ClientError as e:
             await message.answer(f"Сетевая ошибка: {e}")
+
+
+@dp.message(F.photo)
+async def on_photo(message: types.Message):
+    photo: types.PhotoSize = message.photo[-1]
+
+    bio = BytesIO()
+    await bot.download(photo.file_id, destination=bio)
+    bio.seek(0)
+    file_bytes = bio.read()
+
+    user_text = message.caption or ""
+
+    b64 = base64.b64encode(file_bytes).decode("utf-8")
+
+    payload = {
+        "telegramId": message.from_user.id,
+        "prompt": user_text,
+        "image": b64,
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"{API_URL}/messages", json=payload) as resp:
+                text = await resp.text()
+
+                if resp.status >= 400:
+                    try:
+                        err = await resp.json()
+                        err_msg = err.get("message", text)
+                    except Exception:
+                        err_msg = text
+                    await message.reply(f"Ошибка: {err_msg}")
+                    return
+
+                data = await resp.json()
+                await message.reply(data.get("content", ""))
+    except aiohttp.ClientError as e:
+        await message.reply(f"Сетевая ошибка: {e}")
+
+
+@dp.message(F.document & ~F.document.mime_type.contains("image/"))
+async def handler_doc(message: types.message):
+    doc = message.document
+    bio = BytesIO()
+    await bot.download(doc.file_id, destination=bio)
+    bio.seek(0)
+    data = aiohttp.FormData()
+    data.add_field("file", value=bio, filename=doc.file_name, content_type=doc.mime_type)
+    caption = message.caption or ""
+    data.add_field("prompt", caption, content_type="text/plain")
+    data.add_field("telegramId", str(message.from_user.id), content_type="text/plain")
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"{API_URL}/messages", data=data) as resp:
+                text = await resp.text()
+
+                if resp.status >= 400:
+                    try:
+                        err = await resp.json()
+                        err_msg = err.get("message", text)
+                    except Exception:
+                        err_msg = text
+                    await message.reply(f"Ошибка: {err_msg}")
+                    return
+
+                data = await resp.json()
+                await message.reply(data.get("content", ""))
+    except aiohttp.ClientError as e:
+        await message.reply(f"Сетевая ошибка: {e}")
 
 
 async def main():

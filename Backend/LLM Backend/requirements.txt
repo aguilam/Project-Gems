@@ -4,3 +4,4 @@ httpx
 python-dotenv 
 groq
 cerebras_cloud_sdk
+textract

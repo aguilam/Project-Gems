@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File
 from pydantic import BaseModel
 import httpx
 import os
@@ -6,6 +6,9 @@ from dotenv import load_dotenv
 from groq import Groq
 from fastapi.responses import JSONResponse
 import base64
+import textract
+import tempfile
+
 
 load_dotenv()
 
@@ -31,6 +34,14 @@ class LLMRequest(BaseModel):
     systemPrompt: str
 
 
+class OcrRequest(BaseModel):
+    imageBase64: str
+    
+class FileRequest(BaseModel):
+    buffer: str 
+    name: str
+    mime: str
+
 @app.post("/llm")
 async def llm_query(request: LLMRequest):
     prodiver = request.provider
@@ -45,6 +56,56 @@ async def llm_query(request: LLMRequest):
     elif "cloudflare" in prodiver:
         return await query_cloudflare(request)
 
+
+@app.post("/ocr")
+async def ocr_query(req: OcrRequest):
+    imageBase64 = req.imageBase64
+    chat_completion = groqClient.chat.completions.create(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Что на этом изображении? Опиши подробно"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{imageBase64}",
+                        },
+                    },
+                ],
+            }
+        ],
+        model="meta-llama/llama-4-scout-17b-16e-instruct",
+    )
+    return chat_completion.choices[0].message.content
+
+@app.post("/files")
+async  def files_recognize(req: FileRequest):
+    try:
+        file_bytes = base64.b64decode(req.buffer)
+    except Exception as e:
+        return {"error": "Invalid Base64", "detail": str(e)}
+    ext = req.name.rsplit(".", 1)[-1].lower()
+    suffix = f".{ext}" if ext else ""
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+        raw = textract.process(tmp_path)
+        text = raw.decode("utf-8", errors="ignore")
+
+    except Exception as e:
+        return {"error": "Processing failed", "detail": str(e)}
+
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    return text
 
 async def query_groq(request: LLMRequest):
     chat_completion = await groqClient.chat.completions.create(

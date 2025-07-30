@@ -1,10 +1,24 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Post,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
 import { MessagesService } from './messages.service';
+import { memoryStorage } from 'multer';
+import { FileInterceptor } from '@nestjs/platform-express';
+export interface FileDTO {
+  buffer: string;
+  name: string;
+  mime: string;
+}
 
 export class MessageDTO {
   telegramId: number;
   prompt: string;
-  model: string;
+  image?: string;
+  file?: FileDTO;
 }
 
 @Controller('messages')
@@ -12,7 +26,34 @@ export class MessagesController {
   constructor(private messagesService: MessagesService) {}
 
   @Post()
-  createMessage(@Body() dto: MessageDTO) {
-    return this.messagesService.sentUserMessage(dto);
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 10 * 1024 * 1024 },
+    }),
+  )
+  createMessage(
+    @Body() dto: MessageDTO,
+    @UploadedFile() uploadedFile?: Express.Multer.File,
+  ) {
+    if (uploadedFile) {
+      const file: FileDTO = {
+        buffer: uploadedFile.buffer.toString('base64'),
+        name: uploadedFile.originalname,
+        mime: uploadedFile.mimetype,
+      };
+      return this.messagesService.sentUserMessage({
+        telegramId: +dto.telegramId,
+        prompt: dto.prompt,
+        image: dto.image,
+        file: file,
+      });
+    } else {
+      return this.messagesService.sentUserMessage({
+        telegramId: +dto.telegramId,
+        prompt: dto.prompt,
+        image: dto.image,
+      });
+    }
   }
 }
