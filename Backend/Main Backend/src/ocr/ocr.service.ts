@@ -7,6 +7,7 @@ export class OcrService {
     const ocrResponse = await axios.post('http://127.0.0.1:8000/ocr', {
       imageBase64: imageInBase64,
     });
-    return ocrResponse.data;
+    const fullResponse = `Пользователь предоставил контекст в фото, вот что на них было. /n ${ocrResponse.data}`;
+    return fullResponse;
   }
 }

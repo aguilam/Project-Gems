@@ -202,18 +202,27 @@ async def on_photo(message: types.Message):
         await message.reply(f"Сетевая ошибка: {e}")
 
 
-@dp.message(F.document & ~F.document.mime_type.contains("image/"))
+@dp.message((F.document & ~F.document.mime_type.contains("image/")) | F.audio | F.voice)
 async def handler_doc(message: types.message):
-    doc = message.document
-    bio = BytesIO()
-    await bot.download(doc.file_id, destination=bio)
-    bio.seek(0)
+    doc = message.document or message.audio or message.voice
     data = aiohttp.FormData()
-    data.add_field("file", value=bio, filename=doc.file_name, content_type=doc.mime_type)
     caption = message.caption or ""
     data.add_field("prompt", caption, content_type="text/plain")
     data.add_field("telegramId", str(message.from_user.id), content_type="text/plain")
-
+    if not doc:
+        return  
+    bio = BytesIO()
+    await bot.download(doc.file_id, destination=bio)
+    bio.seek(0)
+    filename = getattr(doc, 'file_name', f"{doc.file_id}.ogg")
+    content_type = getattr(doc, 'mime_type', None) or ('audio/ogg' if message.voice else 'application/octet-stream')
+    data.add_field(
+        "file",
+        value=bio,
+        filename=filename,
+        content_type=content_type,
+    )
+    
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(f"{API_URL}/messages", data=data) as resp:

@@ -16,6 +16,7 @@ from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
 from pdfminer.converter import TextConverter
 from pdfminer.layout import LAParams
 import io
+import json
 
 load_dotenv()
 
@@ -130,6 +131,47 @@ async def files_recognize(req: FileRequest):
                 line = "\t".join("" if c is None else str(c) for c in row)
                 parts.append(line)
         text = "\n".join(parts)
+    elif ext in ("mp3", "wav", "ogg", "m4a"):
+        import traceback, logging
+
+        logging.basicConfig(level=logging.DEBUG)
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp:
+                tmp.write(data)
+                tmp_path = tmp.name
+            logging.debug(
+                f"[Audio] temp file written to {tmp_path} size={os.path.getsize(tmp_path)}"
+            )
+
+            logging.debug("[Audio] calling groqClient.audio.transcription.create...")
+            with open(tmp_path, "rb") as f:
+                result =  groqClient.audio.transcriptions.create(
+                    model="whisper-large-v3",
+                    file=("audio." + ext, f.read(), f"audio/{ext}"),
+                    response_format="text"
+                )
+            logging.debug(f"[Audio] groq result raw: {result!r}")
+
+            text = json.dumps(result, indent=2, default=str)
+            if not text:
+                logging.warning(f"[Audio] no 'text' key in result, dumping full result")
+                text = json.dumps(result, indent=2, default=str)
+            logging.debug(f"[Audio] transcription text: {text[:100]}...")
+
+        except Exception:
+            err = traceback.format_exc()
+            logging.error(f"[Audio] exception:\n{err}")
+            # для отладки можно вернуть стек в ответе, но уберите перед продом
+            raise HTTPException(status_code=500, detail=err)
+
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                    logging.debug(f"[Audio] temp file {tmp_path} deleted")
+                except Exception as e:
+                    logging.warning(f"[Audio] failed to delete temp: {e}")
 
     else:
         ext = req.name.rsplit(".", 1)[-1].lower()
