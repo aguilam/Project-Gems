@@ -17,11 +17,18 @@ export interface FileDTO {
   mime: string;
 }
 
+export interface ResponseDTO {
+  content: string;
+  type: string;
+}
+
 export class MessageDTO {
   telegramId: number;
   prompt: string;
   image?: string;
   file?: FileDTO;
+  isForwarded?: boolean;
+  chatId?: number;
 }
 @Injectable()
 export class MessagesService {
@@ -39,19 +46,6 @@ export class MessagesService {
           telegramId: dto.telegramId,
         },
       });
-
-      let ocrResult = '';
-      if (dto.image) {
-        ocrResult = await this.ocrService.imageOcr(dto.image);
-      }
-
-      let fileRecognizeResult = '';
-      if (dto.file) {
-        fileRecognizeResult = await this.fileRecognizeService.recognize(
-          dto.file,
-        );
-      }
-      const chat = await this.chatsService.createChat(user?.id);
 
       if (!user) {
         throw new Error('Пользователь не найден');
@@ -78,6 +72,19 @@ export class MessagesService {
       }
 
       let fullPrompt = '';
+      let ocrResult = '';
+      let fileRecognizeResult = '';
+
+      if (dto.image) {
+        ocrResult = await this.ocrService.imageOcr(dto.image);
+      }
+
+      if (dto.file) {
+        fileRecognizeResult = await this.fileRecognizeService.recognize(
+          dto.file,
+        );
+      }
+
       if (ocrResult) {
         fullPrompt = `${ocrResult}\n\n${dto.prompt}`;
       } else if (fileRecognizeResult) {
@@ -85,15 +92,28 @@ export class MessagesService {
       } else {
         fullPrompt = dto.prompt;
       }
-
-      const response = await axios.post('http://127.0.0.1:8000/llm', {
-        prompt: fullPrompt,
-        model: model.systemName,
-        provider: model.provider,
-        premium: user.premium,
-        systemPrompt: user.systemPrompt,
-      });
-
+      let chat;
+      const previousMessages: { content: string; role: string }[] = [
+        {
+          content: user.systemPrompt,
+          role: 'system',
+        },
+      ];
+      if (dto.chatId) {
+        chat = await this.chatsService.getChatById(dto.chatId);
+        if (!chat) {
+          throw new Error('Чат не найден');
+        }
+        const chatMessages = chat.messages;
+        for (let i = 0; i < chatMessages.length; i++) {
+          previousMessages.push({
+            content: chatMessages[i].content,
+            role: chatMessages[i].role.toLowerCase(),
+          });
+        }
+      } else {
+        chat = await this.chatsService.createChat(user?.id);
+      }
       const userMessage = await this.prisma.message.create({
         data: {
           chatId: chat.id,
@@ -102,9 +122,24 @@ export class MessagesService {
           content: fullPrompt,
         },
       });
-
-      const responseData: { content: string; type: string } = response.data;
-
+      if (fileRecognizeResult && dto.isForwarded) {
+        return {
+          content: fileRecognizeResult,
+          type: 'text',
+        };
+      }
+      previousMessages.push({
+        content: fullPrompt,
+        role: 'user',
+      });
+      const response = await axios.post('http://127.0.0.1:8000/llm', {
+        prompt: previousMessages,
+        model: model.systemName,
+        provider: model.provider,
+        premium: user.premium,
+        systemPrompt: user.systemPrompt,
+      });
+      const responseData: ResponseDTO = response.data;
       await this.prisma.message.create({
         data: {
           chatId: chat.id,

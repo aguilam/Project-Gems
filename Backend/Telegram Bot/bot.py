@@ -12,6 +12,8 @@ import asyncio
 import os
 import base64
 from io import BytesIO
+from aiogram.fsm.context import FSMContext
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from dotenv import load_dotenv
 
@@ -36,6 +38,20 @@ async def cmd_start(message: types.Message):
                 await message.answer("Привет! Я готов общаться.")
     except aiohttp.ClientError as e:
         await message.answer(f"Ошибка подключения к серверу: {e}")
+
+@dp.message(Command(commands=['chats']))
+async def cmd_chats(message: types.Message):
+    builder = InlineKeyboardBuilder()
+    for i in range(17):
+        builder.button(text=str(i), callback_data=f"sel_{i}")
+    builder.adjust(4, 4, 3)
+    await message.answer("Выберите чат‑номер:", reply_markup=builder.as_markup())
+
+@dp.callback_query(lambda c: c.data.startswith("sel_"))
+async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
+    chat_id = int(query.data.split("_", 1)[1])
+    await state.update_data(active_chat=chat_id)
+    await query.answer(f"Активный чат переключён на {chat_id}")
 
 
 @dp.message(Command(commands=["system_prompt"]))
@@ -75,7 +91,11 @@ async def fetch_user(telegram_id: int) -> dict:
             resp.raise_for_status()
             return await resp.json()
 
-
+async def fetch_chats(telegram_id: int) -> dict:
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"{API_URL}/chats/{telegram_id}") as resp:
+            resp.raise_for_status()
+            return await resp.json()
 async def patch_user_model(telegram_id: int, model_id: str) -> dict:
     payload = {"telegramId": telegram_id, "defaultModel": model_id}
     async with aiohttp.ClientSession() as session:
@@ -130,10 +150,14 @@ async def on_model_selected(callback: CallbackQuery):
 
 
 @dp.message(lambda m: m.text is not None and not m.text.startswith("/"))
-async def message_to_llm(message: types.Message):
-    photo: types.PhotoSize = message.photo[-1]
-
-    payload = {"telegramId": message.from_user.id, "prompt": message.text}
+async def message_to_llm(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    chat_id = data.get("active_chat")
+    payload = {
+        "telegramId": message.from_user.id,
+        "prompt": message.text,
+        "chatId": chat_id,
+    }
 
     async with aiohttp.ClientSession() as session:
         try:
@@ -172,7 +196,7 @@ async def on_photo(message: types.Message):
     bio.seek(0)
     file_bytes = bio.read()
 
-    user_text = message.caption or ""
+    user_text = message.caption or "Игнорируй этот текст,  читай только что выше"
 
     b64 = base64.b64encode(file_bytes).decode("utf-8")
 
@@ -204,25 +228,31 @@ async def on_photo(message: types.Message):
 
 @dp.message((F.document & ~F.document.mime_type.contains("image/")) | F.audio | F.voice)
 async def handler_doc(message: types.message):
+    is_forwarded = bool(
+        message.forward_from or message.forward_from_chat or message.forward_sender_name
+    )
     doc = message.document or message.audio or message.voice
     data = aiohttp.FormData()
-    caption = message.caption or ""
+    caption = message.caption or "Игнорируй этот текст,  читай только что выше"
     data.add_field("prompt", caption, content_type="text/plain")
     data.add_field("telegramId", str(message.from_user.id), content_type="text/plain")
+    data.add_field("isForwarded", str(is_forwarded), content_type="text/plain")
     if not doc:
-        return  
+        return
     bio = BytesIO()
     await bot.download(doc.file_id, destination=bio)
     bio.seek(0)
-    filename = getattr(doc, 'file_name', f"{doc.file_id}.ogg")
-    content_type = getattr(doc, 'mime_type', None) or ('audio/ogg' if message.voice else 'application/octet-stream')
+    filename = getattr(doc, "file_name", f"{doc.file_id}.ogg")
+    content_type = getattr(doc, "mime_type", None) or (
+        "audio/ogg" if message.voice else "application/octet-stream"
+    )
     data.add_field(
         "file",
         value=bio,
         filename=filename,
         content_type=content_type,
     )
-    
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(f"{API_URL}/messages", data=data) as resp:

@@ -19,6 +19,8 @@ export class MessageDTO {
   prompt: string;
   image?: string;
   file?: FileDTO;
+  isForwarded?: string;
+  chatId?: number;
 }
 
 @Controller('messages')
@@ -47,12 +49,15 @@ export class MessagesController {
         prompt: dto.prompt,
         image: dto.image,
         file: file,
+        isForwarded: Boolean(dto.isForwarded),
+        chatId: dto.chatId,
       });
     } else {
       return this.messagesService.sentUserMessage({
         telegramId: +dto.telegramId,
         prompt: dto.prompt,
         image: dto.image,
+        chatId: dto.chatId,
       });
     }
   }

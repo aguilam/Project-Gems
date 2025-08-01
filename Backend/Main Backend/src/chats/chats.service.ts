@@ -1,12 +1,26 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 
 export interface Chat {
   id: number;
-  title?: string;
+  createdAt: Date;
+  title: string;
+  type: boolean;
+  updatedAt: Date;
 }
-
+type ChatWithMessages = Prisma.ChatGetPayload<{
+  include: {
+    messages: {
+      select: {
+        senderId: true;
+        content: true;
+        role: true;
+      };
+    };
+  };
+}>;
 @Injectable()
 export class ChatsService {
   constructor(private prisma: PrismaService) {}
@@ -31,9 +45,18 @@ export class ChatsService {
     return chats;
   }
 
-  async getChatById(chatId: number) {
+  async getChatById(chatId: number): Promise<ChatWithMessages | null> {
     const chat = await this.prisma.chat.findUnique({
       where: { id: chatId },
+      include: {
+        messages: {
+          select: {
+            senderId: true,
+            content: true,
+            role: true,
+          },
+        },
+      },
     });
 
     return chat;

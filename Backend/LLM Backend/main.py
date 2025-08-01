@@ -17,6 +17,7 @@ from pdfminer.converter import TextConverter
 from pdfminer.layout import LAParams
 import io
 import json
+from typing import Literal, List
 
 load_dotenv()
 
@@ -33,9 +34,12 @@ groqClient = Groq(
     api_key=GROQ_API_KEY,
 )
 
+class ChatMessage(BaseModel):
+    role: Literal["system", "user", "assistant"]
+    content: str
 
 class LLMRequest(BaseModel):
-    prompt: str
+    prompt: List[ChatMessage]
     model: str
     provider: list
     premium: bool
@@ -93,7 +97,7 @@ async def ocr_query(req: OcrRequest):
 @app.post("/files")
 async def files_recognize(req: FileRequest):
     data = base64.b64decode(req.buffer)
-
+    mediaType = ""
     ext = req.name.rsplit(".", 1)[-1].lower()
 
     if ext == "pdf":
@@ -107,6 +111,7 @@ async def files_recognize(req: FileRequest):
         fp.seek(0)
 
         total_text = ""
+        mediaType = "pdf"
         for page in PDFPage.get_pages(fp, check_extractable=False):
             interpreter.process_page(page)
             page_text = retstr.getvalue()
@@ -131,47 +136,29 @@ async def files_recognize(req: FileRequest):
                 line = "\t".join("" if c is None else str(c) for c in row)
                 parts.append(line)
         text = "\n".join(parts)
+        mediaType = "table"
     elif ext in ("mp3", "wav", "ogg", "m4a"):
-        import traceback, logging
-
-        logging.basicConfig(level=logging.DEBUG)
         tmp_path = None
         try:
             with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp:
                 tmp.write(data)
                 tmp_path = tmp.name
-            logging.debug(
-                f"[Audio] temp file written to {tmp_path} size={os.path.getsize(tmp_path)}"
-            )
 
-            logging.debug("[Audio] calling groqClient.audio.transcription.create...")
             with open(tmp_path, "rb") as f:
-                result =  groqClient.audio.transcriptions.create(
+                result = groqClient.audio.transcriptions.create(
                     model="whisper-large-v3",
                     file=("audio." + ext, f.read(), f"audio/{ext}"),
-                    response_format="text"
+                    response_format="text",
+                    prompt="Дословно напиши, точную расшифровку текста на том языке на котором аудио записано, и ничего не более, если ты не нашёл слов в аудио файле, то опиши  что за звуки там.",
                 )
-            logging.debug(f"[Audio] groq result raw: {result!r}")
-
-            text = json.dumps(result, indent=2, default=str)
-            if not text:
-                logging.warning(f"[Audio] no 'text' key in result, dumping full result")
-                text = json.dumps(result, indent=2, default=str)
-            logging.debug(f"[Audio] transcription text: {text[:100]}...")
-
-        except Exception:
-            err = traceback.format_exc()
-            logging.error(f"[Audio] exception:\n{err}")
-            # для отладки можно вернуть стек в ответе, но уберите перед продом
-            raise HTTPException(status_code=500, detail=err)
+            mediaType = "audio"
+            text = json.dumps(result, indent=2, ensure_ascii=False)
+        except Exception(e):
+            raise HTTPException(status_code=500, detail=e)
 
         finally:
             if tmp_path and os.path.exists(tmp_path):
-                try:
-                    os.unlink(tmp_path)
-                    logging.debug(f"[Audio] temp file {tmp_path} deleted")
-                except Exception as e:
-                    logging.warning(f"[Audio] failed to delete temp: {e}")
+                os.unlink(tmp_path)
 
     else:
         ext = req.name.rsplit(".", 1)[-1].lower()
@@ -193,24 +180,21 @@ async def files_recognize(req: FileRequest):
                     os.unlink(tmp_path)
                 except OSError:
                     pass
-    return text
+    return {"text": text, "type": mediaType}
 
 
 async def query_groq(request: LLMRequest):
-    chat_completion = await groqClient.chat.completions.create(
+    chat_completion = groqClient.chat.completions.create(
         messages=[
-            {
-                "role": "user",
-                "content": request.prompt,
-            }
+            {"content": request.systemPrompt, "role": "system"},
+            {"content": request.prompt, "role": "user"},
         ],
         model=request.model,
     )
-
     return JSONResponse(
         content={
             "type": "text",
-            "content": chat_completion["choices"][0]["message"]["content"],
+            "content": chat_completion.choices[0].message.content,
         }
     )
 
@@ -220,7 +204,7 @@ async def query_mistral(request: LLMRequest):
     headers = {"Authorization": f"Bearer {MISTRAL_API_KEY}"}
     payload = {
         "model": request.model,
-        "messages": [{"role": "user", "content": request.prompt}],
+        "messages": [m.dict() for m in request.prompt],
     }
     async with httpx.AsyncClient() as client:
         resp = await client.post(url, json=payload, headers=headers)
@@ -253,7 +237,10 @@ async def query_openrouter(request: LLMRequest):
     headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}"}
     payload = {
         "model": request.model,
-        "messages": [{"role": "user", "content": request.prompt}],
+        "messages": [
+            {"content": request.systemPrompt, "role": "system"},
+            {"content": request.prompt, "role": "user"},
+        ],
     }
     async with httpx.AsyncClient() as client:
         resp = await client.post(url, json=payload, headers=headers)

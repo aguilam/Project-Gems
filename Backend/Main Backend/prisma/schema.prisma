@@ -9,11 +9,11 @@ datasource db {
 }
 
 model User {
-  id               Int       @id @default(autoincrement())
+  id               String    @id @default(uuid())
   telegramId       Int       @unique
   userName         String
   systemPrompt     String
-  defaultModelId   Int
+  defaultModelId   String
   defaultModel     AIModel   @relation(fields: [defaultModelId], references: [id])
   premium          Boolean   @default(false)
   freeQuestions    Int
@@ -24,7 +24,7 @@ model User {
 }
 
 model Chat {
-  id        Int       @id @default(autoincrement())
+  id        String    @id @default(uuid())
   title     String
   users     User[]
   messages  Message[]
@@ -34,7 +34,7 @@ model Chat {
 }
 
 model AIModel {
-  id          Int       @id @default(autoincrement())
+  id          String    @id @default(uuid())
   name        String
   systemName  String
   description String?
@@ -48,13 +48,13 @@ model AIModel {
 model Message {
   id        Int         @id @default(autoincrement())
   chat      Chat        @relation(fields: [chatId], references: [id])
-  chatId    Int
+  chatId    String
   sender    User        @relation(fields: [senderId], references: [id])
-  senderId  Int
+  senderId  String
   role      MessageRole
   content   String
   model     AIModel?    @relation(fields: [modelId], references: [id])
-  modelId   Int?
+  modelId   String?
   replyTo   Message?    @relation("MessageReplies", fields: [replyToId], references: [id])
   replyToId Int?
   replies   Message[]   @relation("MessageReplies")
