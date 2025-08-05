@@ -20,7 +20,7 @@ export class MessageDTO {
   image?: string;
   file?: FileDTO;
   isForwarded?: string;
-  chatId?: number;
+  chatId?: string;
 }
 
 @Controller('messages')

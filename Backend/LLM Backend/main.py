@@ -64,6 +64,7 @@ class LLMRequest(BaseModel):
     model: str
     provider: list
     premium: bool
+    is_agent: bool = False 
 
 
 class OcrRequest(BaseModel):
@@ -78,7 +79,6 @@ class FileRequest(BaseModel):
 
 @app.post("/llm")
 async def llm_query(request: LLMRequest):
-    print(request)
     prodiver = request.provider
     if "mistral" in prodiver:
         return await query_mistral(request)
@@ -260,7 +260,10 @@ async def providerRouting(request: LLMRequest):
         base_url=provider["base_url"],
         api_key=provider["api_key"],
     )
-    full_messages = await tool_agent_call(request.prompt)
+    if(request.is_agent == True):
+        full_messages = await tool_agent_call(request.prompt)
+    else:
+        full_messages = [m.dict() for m in request.prompt]
     completion = client.chat.completions.create(
         model=request.model, messages=full_messages
     )
@@ -384,7 +387,6 @@ async def web_search(query: str, freshness: str = "noLimit"):
 
 
 async def science_search(query: str):
-    print(query)
     url = f"https://api.wolframalpha.com/v2/query?appid=TV3TVAVWAR&input={query}&output=JSON"
     timeout = httpx.Timeout(connect=60.0, read=120.0, write=60.0, pool=5.0)
 
@@ -419,7 +421,6 @@ async def tool_agent_call(start_messages: ChatMessage):
             tools=tools,
         )
         msg = resp.choices[0].message
-        print(msg)
         if not msg.tool_calls:
             print("Assistant:", msg.content)
             break

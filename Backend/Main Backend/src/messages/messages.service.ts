@@ -28,7 +28,7 @@ export class MessageDTO {
   image?: string;
   file?: FileDTO;
   isForwarded?: boolean;
-  chatId?: number;
+  chatId?: string;
 }
 @Injectable()
 export class MessagesService {
@@ -124,7 +124,7 @@ export class MessagesService {
         data: {
           chatId: chat.id,
           senderId: user.id,
-          role: 'USER',
+          role: 'user',
           content: fullPrompt,
         },
       });
@@ -143,7 +143,7 @@ export class MessagesService {
         data: {
           chatId: chat.id,
           senderId: user.id,
-          role: 'ASSISTANT',
+          role: 'assistant',
           content: responseData.content,
           replyToId: userMessage.id,
         },

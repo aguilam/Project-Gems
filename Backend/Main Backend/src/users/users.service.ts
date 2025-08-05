@@ -1,12 +1,17 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
 
 export class User {
   telegramId: number;
   username?: string;
 }
-
+export class UpdateUserDto {
+  telegramId: number;
+  userName?: string;
+  systemPrompt?: string;
+  defaultModelId?: string;
+}
 @Injectable()
 export class UsersService {
   constructor(private prisma: PrismaService) {}
@@ -19,9 +24,11 @@ export class UsersService {
         userName: dto.username ?? '',
         systemPrompt: '',
         premium: false,
-        freeQuestions: 20,
+        freeQuestions: 25,
         premiumQuestions: 0,
-        defaultModel: { connect: { id: 2 } },
+        defaultModel: {
+          connect: { id: '5f3ac64b-34a9-4edf-8805-b20b8b9d1596' },
+        },
       },
       update: { userName: dto.username },
       include: { defaultModel: true },
@@ -36,20 +43,16 @@ export class UsersService {
     return user;
   }
 
-  async updateUserInfo(dto: any) {
-    const { telegramId, defaultModel, ...rest } = dto;
-    if (!telegramId) throw new Error('telegramId is required');
+  async updateUserInfo(dto: UpdateUserDto) {
+    const { telegramId, defaultModelId, ...rest } = dto;
+    if (!telegramId) {
+      throw new BadRequestException('telegramId is required');
+    }
 
-    const data: any = { ...rest };
+    const data: Record<string, unknown> = { ...rest };
 
-    if (defaultModel !== undefined) {
-      const modelId = Number(defaultModel);
-      if (Number.isNaN(modelId)) {
-        throw new Error('defaultModel must be a number or numeric string');
-      }
-      data.defaultModel = {
-        connect: { id: modelId },
-      };
+    if (defaultModelId !== undefined) {
+      data.defaultModelId = defaultModelId.trim();
     }
 
     const user = await this.prisma.user.update({
@@ -57,7 +60,6 @@ export class UsersService {
       data,
       include: { defaultModel: true },
     });
-
     return user;
   }
 }

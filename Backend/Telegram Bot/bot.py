@@ -41,15 +41,27 @@ async def cmd_start(message: types.Message):
 
 @dp.message(Command(commands=['chats']))
 async def cmd_chats(message: types.Message):
+    telegram_id = message.from_user.id
+    try:
+        chats = await fetch_chats(telegram_id)
+    except Exception as e:
+        await message.answer(f"Не удалось получить список чатов: {e}")
+        return
+
     builder = InlineKeyboardBuilder()
-    for i in range(17):
-        builder.button(text=str(i), callback_data=f"sel_{i}")
-    builder.adjust(4, 4, 3)
-    await message.answer("Выберите чат‑номер:", reply_markup=builder.as_markup())
+
+    for chat in chats:
+        builder.button(
+            text=chat['id'] or chat['id'][:8],  
+            callback_data=f"sel_{chat['id']}"
+        )
+
+    builder.adjust(2)
+    await message.answer("Выберите чат:", reply_markup=builder.as_markup())
 
 @dp.callback_query(lambda c: c.data.startswith("sel_"))
 async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
-    chat_id = int(query.data.split("_", 1)[1])
+    chat_id = query.data.split("_", 1)[1]
     await state.update_data(active_chat=chat_id)
     await query.answer(f"Активный чат переключён на {chat_id}")
 
@@ -93,11 +105,11 @@ async def fetch_user(telegram_id: int) -> dict:
 
 async def fetch_chats(telegram_id: int) -> dict:
     async with aiohttp.ClientSession() as session:
-        async with session.get(f"{API_URL}/chats/{telegram_id}") as resp:
+        async with session.get(f"{API_URL}/chats?telegramId={telegram_id}") as resp:
             resp.raise_for_status()
             return await resp.json()
 async def patch_user_model(telegram_id: int, model_id: str) -> dict:
-    payload = {"telegramId": telegram_id, "defaultModel": model_id}
+    payload = {"telegramId": telegram_id, "defaultModelId": model_id}
     async with aiohttp.ClientSession() as session:
         async with session.patch(f"{API_URL}/user", json=payload) as resp:
             resp.raise_for_status()
@@ -117,20 +129,33 @@ def build_keyboard(
             if str(m["id"]) == selected_id:
                 label = f"✅ {label}"
             callback_data = f"model_select:{m['id']}"
-
         buttons.append(InlineKeyboardButton(text=label, callback_data=callback_data))
 
+    info_btn = InlineKeyboardButton(
+        text="ℹ️ Информация о моделях",
+        callback_data="models_info"
+    )
     rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
+    rows.append([info_btn])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @dp.message(Command(commands=["models"]))
 async def on_models_command(message: types.Message):
     telegram_id = message.from_user.id
-    models, user = await asyncio.gather(fetch_models(), fetch_user(telegram_id))
-    current_model = str(user.get("defaultModel", ""))
-    user_premium = user.get("premium", False)
-    kb = build_keyboard(models, selected_id=current_model, user_premium=user_premium)
+    models, user = await asyncio.gather(
+        fetch_models(), fetch_user(telegram_id)
+    )
+
+    current_model_id = str(user.get("defaultModelId", ""))
+
+    kb = build_keyboard(
+        models,
+        selected_id=current_model_id,
+        user_premium=user.get("premium", False)
+    )
+
+
     await message.answer("Выберите модель:", reply_markup=kb)
 
 
@@ -138,15 +163,34 @@ async def on_models_command(message: types.Message):
 async def on_model_selected(callback: CallbackQuery):
     telegram_id = callback.from_user.id
     selected_id = callback.data.split(":", 1)[1]
-    await patch_user_model(telegram_id, selected_id)
 
-    models = await fetch_models()
-    user = await fetch_user(telegram_id)
+    await patch_user_model(telegram_id, selected_id)
+    models, user = await asyncio.gather(
+        fetch_models(), fetch_user(telegram_id)
+    )
     kb = build_keyboard(
         models, selected_id=selected_id, user_premium=user.get("premium", False)
     )
+
     await callback.message.edit_reply_markup(reply_markup=kb)
     await callback.answer(text="✅ Модель обновлена", show_alert=False)
+
+
+@dp.callback_query(lambda c: c.data == "models_info")
+async def on_models_info(callback: CallbackQuery):
+    models = await fetch_models()
+    info_lines = [
+        f"\n*{m['name']}* – {m.get('description', '_без описания_')}"
+        for m in models
+    ]
+    info_text = "\n".join(info_lines)
+
+    kb = callback.message.reply_markup
+
+    new_text = f"ℹ️ *Список всех моделей:*\n\n{info_text}"
+    await callback.message.edit_text(new_text, parse_mode="Markdown", reply_markup=kb)
+    await callback.answer() 
+
 
 
 @dp.message(lambda m: m.text is not None and not m.text.startswith("/"))
@@ -171,7 +215,7 @@ async def message_to_llm(message: types.Message, state: FSMContext):
                     except Exception:
                         err_msg = text
 
-                    await message.answer({err_msg})
+                    await message.answer(err_msg)
                     return
 
                 data = await resp.json()

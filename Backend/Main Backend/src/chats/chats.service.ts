@@ -45,7 +45,7 @@ export class ChatsService {
     return chats;
   }
 
-  async getChatById(chatId: number): Promise<ChatWithMessages | null> {
+  async getChatById(chatId: string): Promise<ChatWithMessages | null> {
     const chat = await this.prisma.chat.findUnique({
       where: { id: chatId },
       include: {
@@ -62,7 +62,7 @@ export class ChatsService {
     return chat;
   }
 
-  async deleteChat(id: number) {
+  async deleteChat(id: string) {
     const chat = await this.prisma.chat.delete({
       where: { id },
     });

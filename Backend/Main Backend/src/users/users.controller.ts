@@ -13,6 +13,13 @@ export class LoginDto {
   username?: string;
 }
 
+export class UpdateUserDto {
+  telegramId: number;
+  userName?: string;
+  systemPrompt?: string;
+  defaultModelId?: string;
+}
+
 @Controller('user')
 export class usersController {
   constructor(private usersService: UsersService) {}
@@ -28,7 +35,7 @@ export class usersController {
   }
 
   @Patch()
-  patchUser(@Body() dto: any) {
+  patchUser(@Body() dto: UpdateUserDto) {
     return this.usersService.updateUserInfo(dto);
   }
 }

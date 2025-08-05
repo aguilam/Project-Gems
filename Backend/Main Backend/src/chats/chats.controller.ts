@@ -22,11 +22,11 @@ export class ChatsController {
 
   @Get()
   getChats(@Query('telegramId') telegramId: number) {
-    return this.chatsService.getAllChats(telegramId);
+    return this.chatsService.getAllChats(+telegramId);
   }
 
   @Delete(':id')
-  deleteChat(@Param('id') id: number) {
+  deleteChat(@Param('id') id: string) {
     return this.chatsService.deleteChat(id);
   }
 }
