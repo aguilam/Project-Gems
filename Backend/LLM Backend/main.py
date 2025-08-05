@@ -18,6 +18,8 @@ from pdfminer.layout import LAParams
 import io
 import json
 from typing import Literal, List
+import openai
+from cerebras.cloud.sdk import Cerebras
 
 load_dotenv()
 
@@ -26,24 +28,42 @@ app = FastAPI()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 CLOUDFLARE_API_KEY = os.getenv("CLOUDFLARE_API_KEY", "")
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "")
+
+client = Cerebras(
+    api_key=os.environ.get("CEREBRAS_API_KEY"),
+)
 
 groqClient = Groq(
     api_key=GROQ_API_KEY,
 )
+providers = {
+    "cerebras": {
+        "base_url": "https://api.cerebras.ai/v1",
+        "api_key": os.environ.get("CEREBRAS_API_KEY"),
+    },
+    "groq": {
+        "base_url": "https://api.groq.com/openai/v1",
+        "api_key": os.environ.get("GROQ_API_KEY"),
+    },
+    "openrouter": {
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key": os.environ.get("OPENROUTER_API_KEY"),
+    },
+}
+
 
 class ChatMessage(BaseModel):
-    role: Literal["system", "user", "assistant"]
+    role: Literal["system", "user", "assistant", "function"]
     content: str
+
 
 class LLMRequest(BaseModel):
     prompt: List[ChatMessage]
     model: str
     provider: list
     premium: bool
-    systemPrompt: str
 
 
 class OcrRequest(BaseModel):
@@ -58,17 +78,14 @@ class FileRequest(BaseModel):
 
 @app.post("/llm")
 async def llm_query(request: LLMRequest):
+    print(request)
     prodiver = request.provider
-    if "cerebras" in prodiver and request.premium == True:
-        return await query_cerebras(request)
-    elif "groq" in prodiver:
-        return await query_groq(request)
-    elif "mistral" in prodiver:
+    if "mistral" in prodiver:
         return await query_mistral(request)
-    elif "openrouter" in prodiver:
-        return await query_openrouter(request)
     elif "cloudflare" in prodiver:
         return await query_cloudflare(request)
+    else:
+        return await providerRouting(request)
 
 
 @app.post("/ocr")
@@ -183,22 +200,6 @@ async def files_recognize(req: FileRequest):
     return {"text": text, "type": mediaType}
 
 
-async def query_groq(request: LLMRequest):
-    chat_completion = groqClient.chat.completions.create(
-        messages=[
-            {"content": request.systemPrompt, "role": "system"},
-            {"content": request.prompt, "role": "user"},
-        ],
-        model=request.model,
-    )
-    return JSONResponse(
-        content={
-            "type": "text",
-            "content": chat_completion.choices[0].message.content,
-        }
-    )
-
-
 async def query_mistral(request: LLMRequest):
     url = "https://api.mistral.ai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {MISTRAL_API_KEY}"}
@@ -215,42 +216,6 @@ async def query_mistral(request: LLMRequest):
             content={
                 "type": "text",
                 "content": data["choices"][0]["message"]["content"],
-            }
-        )
-
-
-async def query_huggingface(request: LLMRequest):
-    url = f"https://api-inference.huggingface.co/models/{request.model}"
-    headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
-    payload = {
-        "inputs": request.prompt,
-    }
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(url, json=payload, headers=headers)
-        if resp.status_code != 200:
-            raise HTTPException(status_code=resp.status_code, detail=resp.text)
-        return resp.json()
-
-
-async def query_openrouter(request: LLMRequest):
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}"}
-    payload = {
-        "model": request.model,
-        "messages": [
-            {"content": request.systemPrompt, "role": "system"},
-            {"content": request.prompt, "role": "user"},
-        ],
-    }
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(url, json=payload, headers=headers)
-        response = resp.json()
-        if resp.status_code != 200:
-            raise HTTPException(status_code=resp.status_code, detail=resp.text)
-        JSONResponse(
-            content={
-                "type": "text",
-                "content": response["choices"][0]["message"]["content"],
             }
         )
 
@@ -289,27 +254,193 @@ async def query_cloudflare(request: LLMRequest):
         return JSONResponse(content={"type": "image", "content": encoded})
 
 
-async def query_cerebras(request: LLMRequest):
-    url = f"https://api.cerebras.ai/v1/chat/completions"
+async def providerRouting(request: LLMRequest):
+    provider = providers[request.provider[0]]
+    client = openai.OpenAI(
+        base_url=provider["base_url"],
+        api_key=provider["api_key"],
+    )
+    full_messages = await tool_agent_call(request.prompt)
+    completion = client.chat.completions.create(
+        model=request.model, messages=full_messages
+    )
+    return JSONResponse(
+        content={
+            "type": "text",
+            "content": completion.choices[0].message.content,
+        }
+    )
+
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "ocr_tool",
+            "description": "Распознаёт изображение Base64 и возвращает текст",
+            "parameters": {
+                "type": "object",
+                "properties": {"image_b64": {"type": "string"}},
+                "required": ["image_b64"],
+            },
+            "strict": True,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "files_tool",
+            "description": "Извлекает текст из файла (pdf, xlsx, прочие)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "buffer": {"type": "string"},
+                    "name": {"type": "string"},
+                },
+                "required": ["buffer", "name"],
+            },
+            "strict": True,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Даёт доступ к поиску в интернете",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Строка с поисковым запросом",
+                    },
+                    "freshness": {
+                        "type": "string",
+                        "enum": ["oneDay", "oneWeek", "oneMonth", "oneYear", "noLimit"],
+                        "description": "Диапазон времени",
+                    },
+                },
+                "required": ["query"],
+            },
+            "strict": True,
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "science_search",
+            "description": r"""
+                Используй этот инструмент тогда когда тебе нужны тяжелые вычисления в математики, физике или  химии, или ответы на очень тяжелые вопросы из тех же сфер, вот памятка по работе.- WolframAlpha understands natural language queries about entities in chemistry, physics, geography, history, art, astronomy, and more.
+                - WolframAlpha performs mathematical calculations, date and unit conversions, formula solving, etc.`
+                - Convert inputs to simplified keyword queries whenever possible (e.g. convert "how many people live in France" to "France population").
+                - Send queries in English only; translate non-English queries before sending, then respond in the original language.
+                - Display image URLs with Markdown syntax: ![URL]
+                - ALWAYS use this exponent notation: `6*10^14`, NEVER `6e14`.
+                - ALWAYS use {"input": query} structure for queries to Wolfram endpoints; `query` must ONLY be a single-line string.
+                - ALWAYS use proper Markdown formatting for all math, scientific, and chemical formulas, symbols, etc.:  '$$\n[expression]\n$$' for standalone cases and '\( [expression] \)' when inline.
+                - Never mention your knowledge cutoff date; Wolfram may return more recent data.
+                - Use ONLY single-letter variable names, with or without integer subscript (e.g., n, n1, n_1).
+                - Use named physical constants (e.g., 'speed of light') without numerical substitution.
+                - Include a space between compound units (e.g., "Ω m" for "ohm*meter").
+                - To solve for a variable in an equation with units, consider solving a corresponding equation without units; exclude counting units (e.g., books), include genuine units (e.g., kg).
+                - If data for multiple properties is needed, make separate calls for each property.
+                - If a WolframAlpha result is not relevant to the query:
+                -- If Wolfram provides multiple 'Assumptions' for a query, choose the more relevant one(s) without explaining the initial result. If you are unsure, ask the user to choose.
+                -- Re-send the exact same 'input' with NO modifications, and add the 'assumption' parameter, formatted as a list, with the relevant values.
+                -- ONLY simplify or rephrase the initial query if a more relevant 'Assumption' or other input suggestions are not provided.
+                -- Do not explain each step unless user input is needed. Proceed directly to making a better API call based on the available assumptions.
+                """,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Строка с запросом для api",
+                    }
+                },
+                "required": ["query"],
+            },
+            "strict": True,
+        },
+    },
+]
+
+
+async def web_search(query: str, freshness: str = "noLimit"):
+    url = "https://api.langsearch.com/v1/web-search"
+
+    payload = json.dumps(
+        {"query": query, "freshness": freshness, "summary": True, "count": 10}
+    )
     headers = {
-        "Authorization": f"Bearer {CEREBRAS_API_KEY}",
+        "Authorization": "Bearer sk-0ac743b6fb314baeab92b68c31f01d40",
         "Content-Type": "application/json",
-    }
-    payload = {
-        "model": request.model,
-        "messages": [
-            {"content": request.systemPrompt, "role": "system"},
-            {"content": request.prompt, "role": "user"},
-        ],
     }
     async with httpx.AsyncClient() as client:
         resp = await client.post(url, json=payload, headers=headers)
-        response = resp.json()
         if resp.status_code != 200:
             raise HTTPException(status_code=resp.status_code, detail=resp.text)
-        return JSONResponse(
-            content={
-                "type": "text",
-                "content": response["choices"][0]["message"]["content"],
+        return resp.json()["data"]
+
+
+async def science_search(query: str):
+    print(query)
+    url = f"https://api.wolframalpha.com/v2/query?appid=TV3TVAVWAR&input={query}&output=JSON"
+    timeout = httpx.Timeout(connect=60.0, read=120.0, write=60.0, pool=5.0)
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.get(url)
+        text = resp.text
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail=text)
+        try:
+            return resp.json()
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Invalid JSON from Wolfram: {text[:200]}..."
+            )
+
+available_functions = {
+    "ocr_tool": ocr_query,
+    "files_tool": files_recognize,
+    "web_search": web_search,
+    "science_search": science_search,
+}
+
+
+async def tool_agent_call(start_messages: ChatMessage):
+    messages: List[dict] = [m.dict() for m in start_messages]
+    
+    while True:
+        resp = client.chat.completions.create(
+            model="qwen-3-32b",
+            messages=messages,
+            tools=tools,
+        )
+        msg = resp.choices[0].message
+        print(msg)
+        if not msg.tool_calls:
+            print("Assistant:", msg.content)
+            break
+
+        messages.append(msg.model_dump())
+
+        call = msg.tool_calls[0]
+        fname = call.function.name
+
+        if fname not in available_functions:
+            raise ValueError(f"Unknown tool requested: {fname!r}")
+
+        args_dict = json.loads(call.function.arguments)
+        output = await available_functions[fname](**args_dict)
+
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": call.id,
+                "name": fname,
+                "content": json.dumps(output),
             }
         )
+    return messages

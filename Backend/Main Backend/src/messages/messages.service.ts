@@ -87,7 +87,7 @@ export class MessagesService {
 
       if (ocrResult) {
         fullPrompt = `${ocrResult}\n\n${dto.prompt}`;
-      } else if (fileRecognizeResult) {
+      } else if (!(fileRecognizeResult.trim() == '')) {
         fullPrompt = `${fileRecognizeResult}\n\n${dto.prompt}`;
       } else {
         fullPrompt = dto.prompt;
@@ -114,6 +114,12 @@ export class MessagesService {
       } else {
         chat = await this.chatsService.createChat(user?.id);
       }
+      if (!(fileRecognizeResult.trim() == '') && dto.isForwarded == true) {
+        return {
+          content: fileRecognizeResult,
+          type: 'text',
+        };
+      }
       const userMessage = await this.prisma.message.create({
         data: {
           chatId: chat.id,
@@ -122,12 +128,6 @@ export class MessagesService {
           content: fullPrompt,
         },
       });
-      if (fileRecognizeResult && dto.isForwarded) {
-        return {
-          content: fileRecognizeResult,
-          type: 'text',
-        };
-      }
       previousMessages.push({
         content: fullPrompt,
         role: 'user',
@@ -137,7 +137,6 @@ export class MessagesService {
         model: model.systemName,
         provider: model.provider,
         premium: user.premium,
-        systemPrompt: user.systemPrompt,
       });
       const responseData: ResponseDTO = response.data;
       await this.prisma.message.create({
