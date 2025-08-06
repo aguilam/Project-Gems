@@ -137,6 +137,7 @@ export class MessagesService {
         model: model.systemName,
         provider: model.provider,
         premium: user.premium,
+        is_agent: false,
       });
       const responseData: ResponseDTO = response.data;
       await this.prisma.message.create({

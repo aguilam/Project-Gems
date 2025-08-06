@@ -63,8 +63,19 @@ export class ChatsService {
   }
 
   async deleteChat(id: string) {
-    const chat = await this.prisma.chat.delete({
+    await this.prisma.message.deleteMany({
+      where: { chatId: id },
+    });
+    return await this.prisma.chat.delete({
       where: { id },
+    });
+  }
+
+  async editChat(chatDTO: { id: string; title: string }) {
+    const { id, title } = chatDTO;
+    const chat = await this.prisma.chat.update({
+      where: { id },
+      data: { title: title },
     });
     return chat;
   }
