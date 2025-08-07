@@ -33,7 +33,6 @@ ROLES = [
     {
         "key": "search_explainer",
         "title": "Умный поисковик 🔍",
-        "description": "Статистика: 35% используют вместо Google, 23% для объяснений",
         "prompt": (
             "Ты — умный помощник, который может быстро найти информацию и объяснить любую тему простым языком.\n\n"
             "Когда пользователь задаёт вопрос:\n"
@@ -47,7 +46,6 @@ ROLES = [
     {
         "key": "editor",
         "title": "Редактор ✍️",
-        "description": "Статистика: 23% используют для написания и редактирования",
         "prompt": (
             "Ты — опытный редактор, который помогает улучшать любые тексты.\n\n"
             "Ты умеешь:\n"
@@ -62,7 +60,6 @@ ROLES = [
     {
         "key": "cook_assistant",
         "title": "Кулинарный помощник 🍳",
-        "description": "Готовый промпт для рецептов и кухонных лайфхаков",
         "prompt": (
             "Ты — домашний кулинар, который помогает с простыми и вкусными решениями.\n\n"
             "Что ты умеешь:\n"
@@ -76,7 +73,6 @@ ROLES = [
     {
         "key": "summarizer",
         "title": "Суммаризатор 📋",
-        "description": "Готовый промпт для кратких пересказов",
         "prompt": (
             "Ты — мастер кратких пересказов. Ты помогаешь людям быстро понять суть.\n\n"
             "Когда получаешь длинный текст или ссылку:\n"
@@ -90,7 +86,6 @@ ROLES = [
     {
         "key": "planner",
         "title": "Планировщик дел 📅",
-        "description": "Готовый промпт для управления задачами",
         "prompt": (
             "Ты — личный помощник по организации времени и задач.\n\n"
             "Помогаешь с:\n"
@@ -104,7 +99,6 @@ ROLES = [
     {
         "key": "support_partner",
         "title": "Собеседник для поддержки 🤝",
-        "description": "Готовый промпт для эмоциональной поддержки",
         "prompt": (
             "Ты — внимательный собеседник, который всегда готов выслушать.\n\n"
             "Ты можешь:\n"
@@ -118,7 +112,6 @@ ROLES = [
     {
         "key": "custom",
         "title": "Свой промпт ✏️",
-        "description": "Введите свой системный промпт вручную",
         "prompt": None,
     },
 ]
@@ -133,7 +126,7 @@ async def cmd_start(message: types.Message):
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(f"{API_URL}/user", json=data) as resp:
-                await message.answer("Привет! Я готов общаться.")
+                await message.answer("Привет! Я готов общаться.", parse_mode=None)
     except aiohttp.ClientError as e:
         await message.answer(f"Ошибка подключения к серверу: {e}")
 
@@ -210,9 +203,9 @@ async def show_chats_menu(target, state: FSMContext, mode: str = None):
     text = text_map[mode]
 
     if isinstance(target, types.CallbackQuery):
-        await target.message.edit_text(text, reply_markup=kb)
+        await target.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     else:
-        await target.answer(text, reply_markup=kb)
+        await target.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
     await state.update_data(mode=mode)
 
@@ -330,31 +323,50 @@ async def on_model_selected(callback: CallbackQuery):
     chat_id = callback.message.chat.id
     await callback.message.edit_reply_markup(reply_markup=kb)
     sent = await callback.bot.send_message(
-        chat_id=chat_id,
-        text=f"📝{model_title}",
-        parse_mode="Markdown"
+        chat_id=chat_id, text=f"📝{model_title}", parse_mode="Markdown"
     )
     try:
-        await callback.bot.unpin_chat_message(chat_id=chat_id)  
+        await callback.bot.unpin_chat_message(chat_id=chat_id)
     except Exception:
-        print('bad')
+        print("bad")
     await callback.bot(PinChatMessage(chat_id=chat_id, message_id=sent.message_id))
 
     await callback.answer(text="✅ Модель обновлена", show_alert=False)
 
 
-@dp.callback_query(lambda c: c.data == "models_info")
-async def on_models_info(callback: CallbackQuery):
-    models = await fetch_models()
-    info_lines = [
-        f"\n*{m['name']}* – {m.get('description', '_без описания_')}" for m in models
+ORIGINAL_TEXT = "Выберите модель:"
+
+
+def toggle_button(markup: InlineKeyboardMarkup, show: bool) -> InlineKeyboardMarkup:
+    rows = [row[:] for row in markup.inline_keyboard]
+    rows = [
+        r
+        for r in rows
+        if not any(b.callback_data in ("models_info", "models_hide") for b in r)
     ]
-    info_text = "\n".join(info_lines)
+    text = "Скрыть модели" if show else "ℹ️ Показать модели"
+    data = "models_hide" if show else "models_info"
+    rows.append([InlineKeyboardButton(text=text, callback_data=data)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
-    kb = callback.message.reply_markup
 
-    new_text = f"ℹ️ *Список всех моделей:*\n\n{info_text}"
-    await callback.message.edit_text(new_text, parse_mode="Markdown", reply_markup=kb)
+@dp.callback_query(lambda c: c.data in ("models_info", "models_hide"))
+async def on_models_toggle(callback: CallbackQuery):
+    kb_old = callback.message.reply_markup
+    if callback.data == "models_info":
+        models = await fetch_models()
+        info_lines = [
+            f"*{m['name']}* – {m.get('description', '_без описания_')}" for m in models
+        ]
+        new_text = f"ℹ️ *Список всех моделей:*\n\n" + "\n".join(info_lines)
+        kb_new = toggle_button(kb_old, show=True)
+    else:
+        new_text = ORIGINAL_TEXT
+        kb_new = toggle_button(kb_old, show=False)
+
+    await callback.message.edit_text(
+        new_text, parse_mode="Markdown", reply_markup=kb_new
+    )
     await callback.answer()
 
 
@@ -372,8 +384,11 @@ async def show_roles_menu(target, state: FSMContext):
         (r["key"] for r in ROLES if r["prompt"] and r["prompt"] == current_prompt),
         "custom",
     )
-    description = next(r["description"] for r in ROLES if r["key"] == matched_key)
-    header = f"*Текущий промпт:* {description}\n\n*Выберите роль:*"
+    role = next(r for r in ROLES if r["key"] == matched_key)
+    if role["key"] == "custom":
+        header = f"*Текущий промпт:* {role['title']} \n\n{current_prompt} \n\n*Выберите роль:*"
+    else:
+        header = f"*Текущий промпт:* {role['title']} \n\n  {role['prompt']} \n\n*Выберите роль:*"
 
     rows = []
     for r in ROLES:
@@ -408,7 +423,7 @@ async def cb_role_select(query: types.CallbackQuery, state: FSMContext):
     if key == "custom":
         await state.update_data(mode="role_custom")
         await query.message.edit_text(
-            "Введите ваш системный промпт или нажмите /role для отмены"
+            "Введите ваш системный промпт или напишите /role для отмены"
         )
     else:
         await patch_user_info(
@@ -423,7 +438,9 @@ async def message_router(message: types.Message, state: FSMContext):
     data = await state.get_data()
     mode = data.get("mode")
     edit_target = data.get("edit_target")
-
+    target = await message.answer(
+        "Нейросеть задумалась", parse_mode=ParseMode.MARKDOWN_V2
+    )
     if mode == "edit" and edit_target:
         new_title = message.text.strip()
         await edit_chat(edit_target, new_title)
@@ -470,7 +487,8 @@ async def message_router(message: types.Message, state: FSMContext):
                     if isinstance(raw, (tuple, list)) and raw:
                         raw = raw[0]
                     safe_md = markdownify(raw)
-                    await message.answer(safe_md, parse_mode=ParseMode.MARKDOWN_V2)
+                    await target.delete()
+                    await message.reply(safe_md, parse_mode=ParseMode.MARKDOWN_V2)
         except ClientError as e:
             await message.answer(f"Сетевая ошибка: {e}")
 
@@ -559,6 +577,81 @@ async def handler_doc(message: types.message):
                 await message.reply(data.get("content", ""))
     except aiohttp.ClientError as e:
         await message.reply(f"Сетевая ошибка: {e}")
+
+
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+
+def payment_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text=f"Оплатить 1 ⭐️", pay=True)
+
+    return builder.as_markup()
+
+
+from aiogram.types import LabeledPrice, Message
+
+
+async def send_invoice_handler(message: Message):
+    prices = [LabeledPrice(label="XTR", amount=1)]
+    await message.answer_invoice(
+        title="Поддержка канала",
+        description="Поддержать канал на 1 звёзд!",
+        prices=prices,
+        provider_token="",
+        payload="channel_support",
+        currency="XTR",
+        reply_markup=payment_keyboard(),
+    )
+
+
+from aiogram.types import PreCheckoutQuery
+
+
+async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery):
+    await pre_checkout_query.answer(ok=True)
+
+
+async def success_payment_handler(message: Message):
+    payment = message.successful_payment
+
+    telegram_charge_id = payment.telegram_payment_charge_id
+    provider_charge_id = payment.provider_payment_charge_id
+
+    user = await fetch_user(message.from_user.id)
+    payment_info = {
+        "userId": user.get("id", ""),
+        "telegramPaymentId": telegram_charge_id,
+        "providerPaymentId": provider_charge_id,
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{API_URL}/subscriptions", json=payment_info
+            ) as resp:
+                resp.raise_for_status()
+                await message.answer(
+                    text="🥳Спасибо за вашу поддержку!🤗", parse_mode=None
+                )
+    except Exception as e:
+        safe_error = str(e).replace("=", "\\=").replace("_", "\\_")
+        await message.answer(
+            text=f"❗ Проблема при оплате: `{safe_error}`\nОбратитесь в поддержку: /paysupport",
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+
+
+async def pay_support_handler(message: Message):
+    await message.answer(
+        text="Добровольные пожертвования не подразумевают возврат средств, "
+        "однако, если вы очень хотите вернуть средства - свяжитесь с нами."
+    )
+
+
+dp.message.register(send_invoice_handler, Command(commands="pro"))
+dp.pre_checkout_query.register(pre_checkout_handler)
+dp.message.register(success_payment_handler, F.successful_payment)
+dp.message.register(pay_support_handler, Command(commands="paysupport"))
 
 
 async def main():

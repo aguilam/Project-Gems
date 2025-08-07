@@ -23,7 +23,6 @@ export class UsersService {
         telegramId: dto.telegramId,
         userName: dto.username ?? '',
         systemPrompt: '',
-        premium: false,
         freeQuestions: 25,
         premiumQuestions: 0,
         defaultModel: {

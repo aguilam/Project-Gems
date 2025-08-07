@@ -45,8 +45,11 @@ export class MessagesService {
         where: {
           telegramId: dto.telegramId,
         },
+        include: {
+          subscription: true,
+        },
       });
-
+      console.log(user);
       if (!user) {
         throw new Error('Пользователь не найден');
       }
@@ -61,7 +64,10 @@ export class MessagesService {
         throw new Error('Модель не найдена');
       }
 
-      if (model.premium && (!user.premium || user.premiumQuestions <= 0)) {
+      if (
+        model.premium &&
+        (!(user.subscription?.status == 'ACTIVE') || user.premiumQuestions <= 0)
+      ) {
         throw new ForbiddenException('Пользователь не обладает premium');
       }
 
@@ -136,7 +142,7 @@ export class MessagesService {
         prompt: previousMessages,
         model: model.systemName,
         provider: model.provider,
-        premium: user.premium,
+        premium: true,
         is_agent: false,
       });
       const responseData: ResponseDTO = response.data;
