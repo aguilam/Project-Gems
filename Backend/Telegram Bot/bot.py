@@ -26,7 +26,7 @@ router = Router()
 TOKEN = os.getenv("TOKEN", "")
 API_URL = os.getenv("API_URL", "http://localhost:3000")
 
-bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN_V2))
+bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 ROLES = [
@@ -127,6 +127,18 @@ async def cmd_start(message: types.Message):
         async with aiohttp.ClientSession() as session:
             async with session.post(f"{API_URL}/user", json=data) as resp:
                 await message.answer("Привет! Я готов общаться.", parse_mode=None)
+                resp.raise_for_status()
+                user_info = await resp.json()
+                chat_id = message.chat.id
+                user_model = user_info["defaultModelId"]
+                message_to_pin = await message.bot.send_message(
+                chat_id=chat_id, text=f"📝{user_model}"
+                )
+                await bot.pin_chat_message(
+                    chat_id=chat_id,
+                    message_id=message_to_pin.message_id,
+                    disable_notification=True
+                )
     except aiohttp.ClientError as e:
         await message.answer(f"Ошибка подключения к серверу: {e}")
 
@@ -231,6 +243,7 @@ async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
     chat_id = query.data.split("_", 1)[1]
     data = await state.get_data()
     mode = data.get("mode")
+    telegram_id = query.from_user.id
 
     if mode == "delete":
         await delete_chat(chat_id)
@@ -245,6 +258,48 @@ async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
         )
 
     else:
+        try:
+            chats = await fetch_chats(telegram_id)
+        except Exception as e:
+            await query.answer(f"Не удалось получить список чатов: {e}", show_alert=True)
+            return
+
+        selected = next((c for c in chats if c["id"] == chat_id), None)
+        chat_title = selected.get("title") if selected and selected.get("title") else chat_id[:8]
+
+
+        chat: types.Chat = await bot.get_chat(query.message.chat.id)
+        pinned: types.Message | None = chat.pinned_message
+
+        #if not pinned:
+        #    return await query.message.reply("В чате нет закреплённого сообщения.")
+
+        original = pinned.text or pinned.caption or ""
+        if '|' not in original:
+            new_text = f"{original} | 💭{chat_title}"
+
+            try:
+                await bot.edit_message_text(
+                    text=new_text,
+                    chat_id=query.message.chat.id,
+                    message_id=pinned.message_id,
+                )
+                return
+            except Exception as e:
+                await query.message.reply(f"Не удалось отредактировать сообщение: {e}")
+        else: 
+            base = original.split('|', 1)[0]
+            new_text = f"{base}| 💭{chat_title}"
+
+            try:
+                await bot.edit_message_text(
+                    text=new_text,
+                    chat_id=query.message.chat.id,
+                    message_id=pinned.message_id,
+                )
+            except Exception as e:
+                await query.message.reply(f"Не удалось отредактировать сообщение: {e}")
+        
         await state.update_data(active_chat=chat_id)
         await query.answer(f"✅ Активный чат: {chat_id}")
 
@@ -322,15 +377,25 @@ async def on_model_selected(callback: CallbackQuery):
     )
     chat_id = callback.message.chat.id
     await callback.message.edit_reply_markup(reply_markup=kb)
-    sent = await callback.bot.send_message(
-        chat_id=chat_id, text=f"📝{model_title}", parse_mode="Markdown"
-    )
-    try:
-        await callback.bot.unpin_chat_message(chat_id=chat_id)
-    except Exception:
-        print("bad")
-    await callback.bot(PinChatMessage(chat_id=chat_id, message_id=sent.message_id))
-
+    chat = await bot.get_chat(chat_id)
+    pinned = chat.pinned_message
+    original = pinned.text or pinned.caption or ""
+    if not pinned:
+        message_to_pin = await callback.bot.send_message(
+            chat_id=chat_id, text=f"📝{model_title}"
+        )
+        await bot.pin_chat_message(
+            chat_id=chat_id,
+            message_id=message_to_pin.message_id,
+            disable_notification=True
+        )
+    else:
+        base = original.split('|', 1)[1]
+        await bot.edit_message_text(
+            text=f"📝{model_title} |{base}",
+            chat_id=callback.message.chat.id,
+            message_id=pinned.message_id,
+        )
     await callback.answer(text="✅ Модель обновлена", show_alert=False)
 
 
@@ -356,7 +421,7 @@ async def on_models_toggle(callback: CallbackQuery):
     if callback.data == "models_info":
         models = await fetch_models()
         info_lines = [
-            f"*{m['name']}* – {m.get('description', '_без описания_')}" for m in models
+            f"*{m['name']}* – {m.get('description', '_без описания_')}\n" for m in models
         ]
         new_text = f"ℹ️ *Список всех моделей:*\n\n" + "\n".join(info_lines)
         kb_new = toggle_button(kb_old, show=True)
@@ -432,15 +497,17 @@ async def cb_role_select(query: types.CallbackQuery, state: FSMContext):
         await query.answer("✅ Системный промпт обновлён")
         await show_roles_menu(query, state)
 
-
 @dp.message(lambda m: m.text is not None and not m.text.startswith("/"))
 async def message_router(message: types.Message, state: FSMContext):
+
     data = await state.get_data()
     mode = data.get("mode")
     edit_target = data.get("edit_target")
     target = await message.answer(
-        "Нейросеть задумалась", parse_mode=ParseMode.MARKDOWN_V2
+        "Нейросеть думает🤔", parse_mode=ParseMode.MARKDOWN_V2
     )
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")    
+
     if mode == "edit" and edit_target:
         new_title = message.text.strip()
         await edit_chat(edit_target, new_title)
@@ -450,6 +517,7 @@ async def message_router(message: types.Message, state: FSMContext):
         return
 
     if data.get("mode") == "role_custom":
+
         prompt = message.text.strip()
         await patch_user_info(
             {"telegramId": message.from_user.id, "systemPrompt": prompt}
@@ -490,6 +558,7 @@ async def message_router(message: types.Message, state: FSMContext):
                     await target.delete()
                     await message.reply(safe_md, parse_mode=ParseMode.MARKDOWN_V2)
         except ClientError as e:
+            await target.delete()
             await message.answer(f"Сетевая ошибка: {e}")
 
 

@@ -1,7 +1,12 @@
 fastapi
 uvicorn
 httpx
-python-dotenv 
+python-dotenv
 groq
 cerebras_cloud_sdk
 textract
+six
+pdfminer.six
+openpyxl
+openai
+mem0ai

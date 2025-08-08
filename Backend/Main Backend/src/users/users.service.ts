@@ -48,15 +48,24 @@ export class UsersService {
       throw new BadRequestException('telegramId is required');
     }
 
-    const data: Record<string, unknown> = { ...rest };
+    const updateData: Record<string, any> = { ...rest };
 
     if (defaultModelId !== undefined) {
-      data.defaultModelId = defaultModelId.trim();
+      const trimmedId = defaultModelId.trim();
+
+      const model = await this.prisma.aIModel.findUnique({
+        where: { id: trimmedId },
+      });
+      if (!model) {
+        throw new BadRequestException(`Модель с id="${trimmedId}" не найдена.`);
+      }
+
+      updateData.defaultModel = { connect: { id: trimmedId } };
     }
 
     const user = await this.prisma.user.update({
       where: { telegramId },
-      data,
+      data: updateData,
       include: { defaultModel: true },
     });
     return user;

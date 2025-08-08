@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, File
+from fastapi import FastAPI, HTTPException, File, Request
 from pydantic import BaseModel
 import httpx
 import os
@@ -11,7 +11,6 @@ import tempfile
 from io import BytesIO
 from openpyxl import load_workbook
 from pdfminer.pdfpage import PDFPage
-from pdfminer.high_level import extract_text_to_fp
 from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
 from pdfminer.converter import TextConverter
 from pdfminer.layout import LAParams
@@ -20,6 +19,8 @@ import json
 from typing import Literal, List
 import openai
 from cerebras.cloud.sdk import Cerebras
+from mem0 import AsyncMemoryClient
+import contextvars
 
 load_dotenv()
 
@@ -30,10 +31,15 @@ MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
 CLOUDFLARE_API_KEY = os.getenv("CLOUDFLARE_API_KEY", "")
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "")
+MEM0_API_KEY = os.getenv("MEM0_API_KEY", "")
 
 client = Cerebras(
     api_key=os.environ.get("CEREBRAS_API_KEY"),
 )
+
+
+mem_client = AsyncMemoryClient()
+
 
 groqClient = Groq(
     api_key=GROQ_API_KEY,
@@ -76,7 +82,16 @@ class FileRequest(BaseModel):
     name: str
     mime: str
 
+current_user_id = contextvars.ContextVar("current_user_id", default=None)
 
+@app.middleware("http")
+async def set_user_context(request: Request, call_next):
+    uid = request.headers.get("X-User-Id")  
+    token = current_user_id.set(uid)
+    try:
+        return await call_next(request)
+    finally:
+        current_user_id.reset(token)
 @app.post("/llm")
 async def llm_query(request: LLMRequest):
     prodiver = request.provider
@@ -170,8 +185,8 @@ async def files_recognize(req: FileRequest):
                 )
             mediaType = "audio"
             text = json.dumps(result, indent=2, ensure_ascii=False)
-        except Exception(e):
-            raise HTTPException(status_code=500, detail=e)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
         finally:
             if tmp_path and os.path.exists(tmp_path):
@@ -256,7 +271,7 @@ async def query_cloudflare(request: LLMRequest):
 
 async def providerRouting(request: LLMRequest):
     provider = providers[request.provider[0]]
-    client = openai.OpenAI(
+    openai_client = openai.OpenAI(
         base_url=provider["base_url"],
         api_key=provider["api_key"],
     )
@@ -264,7 +279,7 @@ async def providerRouting(request: LLMRequest):
         full_messages = await tool_agent_call(request.prompt)
     else:
         full_messages = [m.dict() for m in request.prompt]
-    completion = client.chat.completions.create(
+    completion = openai_client.chat.completions.create(
         model=request.model, messages=full_messages
     )
     return JSONResponse(
@@ -274,8 +289,53 @@ async def providerRouting(request: LLMRequest):
         }
     )
 
+async def add_memory(memory: str, user_id: str | None = None):
+    uid = user_id or current_user_id.get()
+    if not uid:
+        raise HTTPException(status_code=401, detail="user_id is missing")
+    message = {"role": "user", "content": memory}
+    await mem_client.add(message, user_id=uid, async_mode=True)
 
+async def search_memory(query: str, user_id: str | None = None):
+    uid = user_id or current_user_id.get()
+    if not uid:
+        raise HTTPException(status_code=401, detail="user_id is missing")
+    return await mem_client.search(query, user_id=uid)
 tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "add_memory",
+            "description": "Позволяет добавить воспоминание о пользователе",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "memory": {
+                        "type": "string",
+                        "description": "Строка с текстом которое сохраниться в воспоминание. Используй тогда тогда когда об этом попросит пользователь или очень потребуется, например очень важная деталь о пользователе",
+                    }
+                },
+                "required": ["memory"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_memory",
+            "description": "Позволяет совершить поиск по воспоминаниям о пользователе. Используй тогда тогда когда об этом попросит пользователь или очень потребуется",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Строка с текстом по которому будет проведён поиск.",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -286,7 +346,6 @@ tools = [
                 "properties": {"image_b64": {"type": "string"}},
                 "required": ["image_b64"],
             },
-            "strict": True,
         },
     },
     {
@@ -302,7 +361,6 @@ tools = [
                 },
                 "required": ["buffer", "name"],
             },
-            "strict": True,
         },
     },
     {
@@ -325,7 +383,6 @@ tools = [
                 },
                 "required": ["query"],
             },
-            "strict": True,
         },
     },
     {
@@ -363,7 +420,6 @@ tools = [
                 },
                 "required": ["query"],
             },
-            "strict": True,
         },
     },
 ]
@@ -408,17 +464,21 @@ available_functions = {
     "files_tool": files_recognize,
     "web_search": web_search,
     "science_search": science_search,
+    "add_memory": add_memory,
+    "search_memory": search_memory,
 }
 
 
 async def tool_agent_call(start_messages: ChatMessage):
     messages: List[dict] = [m.dict() for m in start_messages]
-    
+
     while True:
         resp = client.chat.completions.create(
             model="qwen-3-32b",
             messages=messages,
             tools=tools,
+            tool_choice="auto",
+            temperature=0.1,
         )
         msg = resp.choices[0].message
         if not msg.tool_calls:

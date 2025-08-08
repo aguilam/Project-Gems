@@ -49,7 +49,6 @@ export class MessagesService {
           subscription: true,
         },
       });
-      console.log(user);
       if (!user) {
         throw new Error('Пользователь не найден');
       }
@@ -138,13 +137,21 @@ export class MessagesService {
         content: fullPrompt,
         role: 'user',
       });
-      const response = await axios.post('http://127.0.0.1:8000/llm', {
-        prompt: previousMessages,
-        model: model.systemName,
-        provider: model.provider,
-        premium: true,
-        is_agent: false,
-      });
+      const response = await axios.post(
+        'http://127.0.0.1:8000/llm',
+        {
+          prompt: previousMessages,
+          model: model.systemName,
+          provider: model.provider,
+          premium: true,
+          is_agent: true,
+        },
+        {
+          headers: {
+            'X-User-Id': user.id,
+          },
+        },
+      );
       const responseData: ResponseDTO = response.data;
       await this.prisma.message.create({
         data: {
