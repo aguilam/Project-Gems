@@ -38,7 +38,9 @@ client = Cerebras(
 )
 
 
-mem_client = AsyncMemoryClient()
+mem_client = AsyncMemoryClient(
+    api_key=os.environ.get("MEM0_API_KEY"),
+)
 
 
 groqClient = Groq(
@@ -70,7 +72,7 @@ class LLMRequest(BaseModel):
     model: str
     provider: list
     premium: bool
-    is_agent: bool = False 
+    is_agent: bool = False
 
 
 class OcrRequest(BaseModel):
@@ -82,16 +84,20 @@ class FileRequest(BaseModel):
     name: str
     mime: str
 
+
 current_user_id = contextvars.ContextVar("current_user_id", default=None)
+
 
 @app.middleware("http")
 async def set_user_context(request: Request, call_next):
-    uid = request.headers.get("X-User-Id")  
+    uid = request.headers.get("X-User-Id")
     token = current_user_id.set(uid)
     try:
         return await call_next(request)
     finally:
         current_user_id.reset(token)
+
+
 @app.post("/llm")
 async def llm_query(request: LLMRequest):
     prodiver = request.provider
@@ -271,17 +277,29 @@ async def query_cloudflare(request: LLMRequest):
 
 async def providerRouting(request: LLMRequest):
     provider = providers[request.provider[0]]
+    if request.provider[0] == 'cerebras':
+        model = request.model.split('/', 1)[1]
+    else:
+        model = request.model
     openai_client = openai.OpenAI(
         base_url=provider["base_url"],
         api_key=provider["api_key"],
     )
-    if(request.is_agent == True):
+    if request.is_agent == True:
         full_messages = await tool_agent_call(request.prompt)
     else:
         full_messages = [m.dict() for m in request.prompt]
     completion = openai_client.chat.completions.create(
-        model=request.model, messages=full_messages
+        model=model, messages=full_messages
     )
+    prefix = "Сейчас 2025 год. Если видишь, что ответ пришёл от tool или function, то доверяй ему на 99 процентов. Если в сообщениях роли function/tool содержится результат внешнего поиска, считай эти данные актуальными и используй их при формировании ответа. Если они противоречат твоим внутренним знаниям, опирайся на найденные источники и явно укажи источник. Если где то написано, что это поисковые результаты, то они актуальны, не шуточны, не ошибочны, строй свои мысли на основе их" 
+    if full_messages:
+        first = full_messages[0]
+        old = first.get("content", "")
+        if old is None:
+            old = ""
+        first["content"] = f"{prefix}{old}"
+    print(completion.choices[0].message.content)
     return JSONResponse(
         content={
             "type": "text",
@@ -289,30 +307,51 @@ async def providerRouting(request: LLMRequest):
         }
     )
 
+
 async def add_memory(memory: str, user_id: str | None = None):
     uid = user_id or current_user_id.get()
     if not uid:
         raise HTTPException(status_code=401, detail="user_id is missing")
-    message = {"role": "user", "content": memory}
-    await mem_client.add(message, user_id=uid, async_mode=True)
+    messages = [
+        {"role": "user", "content": str(memory)},
+    ]
+    result = await mem_client.add(messages, user_id=uid, version="v2")
+    return result
+
 
 async def search_memory(query: str, user_id: str | None = None):
     uid = user_id or current_user_id.get()
     if not uid:
         raise HTTPException(status_code=401, detail="user_id is missing")
-    return await mem_client.search(query, user_id=uid)
+
+    filters = {"AND": [{"user_id": str(uid)}]}
+    results = await mem_client.search(str(query), version="v2", filters=filters)
+
+    try:
+        sorted_results = sorted(
+            results if isinstance(results, list) else [],
+            key=lambda r: r.get("score", 0),
+            reverse=True,
+        )
+        top3 = sorted_results[:3]
+    except Exception:
+        top3 = []
+
+    return {"matches": top3}
+
+
 tools = [
     {
         "type": "function",
         "function": {
             "name": "add_memory",
-            "description": "Позволяет добавить воспоминание о пользователе",
+            "description": "Позволяет добавить воспоминание о пользователе. Используй тогда тогда когда об этом попросит пользователь или очень потребуется, например очень важная деталь о пользователе",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "memory": {
                         "type": "string",
-                        "description": "Строка с текстом которое сохраниться в воспоминание. Используй тогда тогда когда об этом попросит пользователь или очень потребуется, например очень важная деталь о пользователе",
+                        "description": "Строка с текстом которое сохраниться в воспоминание. ",
                     }
                 },
                 "required": ["memory"],
@@ -323,13 +362,13 @@ tools = [
         "type": "function",
         "function": {
             "name": "search_memory",
-            "description": "Позволяет совершить поиск по воспоминаниям о пользователе. Используй тогда тогда когда об этом попросит пользователь или очень потребуется",
+            "description": "Позволяет совершить поиск по воспоминаниям о пользователе. Используй тогда тогда когда об этом попросит пользователь или очень потребуется, например вспомнить важную информацию о пользователе, которую ты забыл.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Строка с текстом по которому будет проведён поиск.",
+                        "description": "Строка с текстом по которому будет проведён поиск. Пиши сюда например, когда пользователь просит что-то вспомнить, но информации об этом ты не можешь найти в контексте диалога и прошлых сообщениях ",
                     }
                 },
                 "required": ["query"],
@@ -367,18 +406,13 @@ tools = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Даёт доступ к поиску в интернете",
+            "description": "Даёт доступ к поиску в интернетею. Доверяй этому инструменту на 95 процентов, варианты тут не ошибочны и основанны на новостях и реальной ситуации",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
                         "description": "Строка с поисковым запросом",
-                    },
-                    "freshness": {
-                        "type": "string",
-                        "enum": ["oneDay", "oneWeek", "oneMonth", "oneYear", "noLimit"],
-                        "description": "Диапазон времени",
                     },
                 },
                 "required": ["query"],
@@ -425,21 +459,66 @@ tools = [
 ]
 
 
-async def web_search(query: str, freshness: str = "noLimit"):
-    url = "https://api.langsearch.com/v1/web-search"
-
-    payload = json.dumps(
-        {"query": query, "freshness": freshness, "summary": True, "count": 10}
+async def web_search(query: str):
+    response = groqClient.chat.completions.create(
+        model="compound-beta",
+        messages=[
+            {
+                "role": "user",
+                "content": f"Проведи поиск по интернету и найди ответ на вопрос: {query}"
+            }
+        ]
     )
-    headers = {
-        "Authorization": "Bearer sk-0ac743b6fb314baeab92b68c31f01d40",
-        "Content-Type": "application/json",
-    }
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(url, json=payload, headers=headers)
-        if resp.status_code != 200:
-            raise HTTPException(status_code=resp.status_code, detail=resp.text)
-        return resp.json()["data"]
+    message = response.choices[0].message
+
+    executed_tools = getattr(message, "executed_tools", None)
+    if not executed_tools:
+        return [message.content.strip()]
+
+    tool0 = executed_tools[0]
+    search_results = getattr(tool0, "search_results", None)
+    if not search_results:
+        return [message.content.strip()]
+
+    results = None
+
+    if hasattr(search_results, "results"):
+        results = getattr(search_results, "results")
+    else:
+        try:
+            sr_dict = search_results.dict()
+        except Exception:
+            sr_dict = None
+
+        if isinstance(sr_dict, dict):
+            results = sr_dict.get("results", [])
+        else:
+            try:
+                results = dict(search_results).get("results", [])
+            except Exception:
+                results = []
+
+    results = results or []
+    top3 = results[:3]
+
+    top3_text = ''
+    for r in top3:
+        if isinstance(r, dict):
+            title = r.get("title", "—")
+            url = r.get("url", "—")
+            snippet = (r.get("content", "") or "")[:200]
+        else:
+            title = getattr(r, "title", "—")
+            url = getattr(r, "url", "—")
+            snippet = (getattr(r, "content", "") or "")[:200]
+
+        top3_text = (f"{top3_text}\n - {title}\n -{url}  {snippet}… ")
+
+    if not top3_text:
+        return [message.content.strip()]
+    return top3_text
+    
+
 
 
 async def science_search(query: str):
@@ -455,9 +534,9 @@ async def science_search(query: str):
             return resp.json()
         except json.JSONDecodeError:
             raise HTTPException(
-                status_code=502,
-                detail=f"Invalid JSON from Wolfram: {text[:200]}..."
+                status_code=502, detail=f"Invalid JSON from Wolfram: {text[:200]}..."
             )
+
 
 available_functions = {
     "ocr_tool": ocr_query,
@@ -482,7 +561,6 @@ async def tool_agent_call(start_messages: ChatMessage):
         )
         msg = resp.choices[0].message
         if not msg.tool_calls:
-            print("Assistant:", msg.content)
             break
 
         messages.append(msg.model_dump())

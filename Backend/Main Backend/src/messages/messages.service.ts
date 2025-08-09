@@ -104,7 +104,7 @@ export class MessagesService {
           role: 'system',
         },
       ];
-      if (dto.chatId) {
+      if (dto.chatId && !(dto.chatId == '0')) {
         chat = await this.chatsService.getChatById(dto.chatId);
         if (!chat) {
           throw new Error('Чат не найден');
@@ -186,6 +186,7 @@ export class MessagesService {
       return {
         content: responseData.content,
         type: responseData.type,
+        chatId: chat.id,
       };
     } catch (error) {
       if (error instanceof HttpException) {

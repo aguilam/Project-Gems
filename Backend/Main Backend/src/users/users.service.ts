@@ -38,6 +38,9 @@ export class UsersService {
   async getUserByTelegramId(telegramId: number) {
     const user = await this.prisma.user.findUnique({
       where: { telegramId },
+      include: {
+        subscription: true,
+      },
     });
     return user;
   }

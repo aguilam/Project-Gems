@@ -132,12 +132,12 @@ async def cmd_start(message: types.Message):
                 chat_id = message.chat.id
                 user_model = user_info["defaultModelId"]
                 message_to_pin = await message.bot.send_message(
-                chat_id=chat_id, text=f"📝{user_model}"
+                    chat_id=chat_id, text=f"📝{user_model}"
                 )
                 await bot.pin_chat_message(
                     chat_id=chat_id,
                     message_id=message_to_pin.message_id,
-                    disable_notification=True
+                    disable_notification=True,
                 )
     except aiohttp.ClientError as e:
         await message.answer(f"Ошибка подключения к серверу: {e}")
@@ -261,21 +261,24 @@ async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
         try:
             chats = await fetch_chats(telegram_id)
         except Exception as e:
-            await query.answer(f"Не удалось получить список чатов: {e}", show_alert=True)
+            await query.answer(
+                f"Не удалось получить список чатов: {e}", show_alert=True
+            )
             return
 
         selected = next((c for c in chats if c["id"] == chat_id), None)
-        chat_title = selected.get("title") if selected and selected.get("title") else chat_id[:8]
-
+        chat_title = (
+            selected.get("title") if selected and selected.get("title") else chat_id[:8]
+        )
 
         chat: types.Chat = await bot.get_chat(query.message.chat.id)
         pinned: types.Message | None = chat.pinned_message
 
-        #if not pinned:
+        # if not pinned:
         #    return await query.message.reply("В чате нет закреплённого сообщения.")
 
         original = pinned.text or pinned.caption or ""
-        if '|' not in original:
+        if "|" not in original:
             new_text = f"{original} | 💭{chat_title}"
 
             try:
@@ -286,9 +289,9 @@ async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
                 )
                 return
             except Exception as e:
-                await query.message.reply(f"Не удалось отредактировать сообщение: {e}")
-        else: 
-            base = original.split('|', 1)[0]
+                return 'bad'
+        else:
+            base = original.split("|", 1)[0]
             new_text = f"{base}| 💭{chat_title}"
 
             try:
@@ -298,8 +301,8 @@ async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
                     message_id=pinned.message_id,
                 )
             except Exception as e:
-                await query.message.reply(f"Не удалось отредактировать сообщение: {e}")
-        
+                return 'bad'
+
         await state.update_data(active_chat=chat_id)
         await query.answer(f"✅ Активный чат: {chat_id}")
 
@@ -325,6 +328,16 @@ async def patch_user_model(telegram_id: int, model_id: str) -> dict:
             resp.raise_for_status()
             return await resp.json()
 
+
+def is_user_premium(user: dict) -> bool:
+    subscription = user.get("subscription")
+    if not subscription:
+        return False
+    status = subscription.get("status")
+    if status != "ACTIVE":
+        return False
+    else:
+        return True
 
 def build_keyboard(
     models: list[dict], selected_id: str | None, user_premium: bool
@@ -357,7 +370,7 @@ async def on_models_command(message: types.Message):
     current_model_id = str(user.get("defaultModelId", ""))
 
     kb = build_keyboard(
-        models, selected_id=current_model_id, user_premium=user.get("premium", False)
+        models, selected_id=current_model_id, user_premium=is_user_premium(user)
     )
 
     await message.answer("Выберите модель:", reply_markup=kb)
@@ -373,7 +386,7 @@ async def on_model_selected(callback: CallbackQuery):
     selected_model = next((m for m in models if m.get("id") == selected_id), None)
     model_title = selected_model["name"]
     kb = build_keyboard(
-        models, selected_id=selected_id, user_premium=user.get("premium", False)
+        models, selected_id=selected_id, user_premium=is_user_premium(user)
     )
     chat_id = callback.message.chat.id
     await callback.message.edit_reply_markup(reply_markup=kb)
@@ -387,10 +400,10 @@ async def on_model_selected(callback: CallbackQuery):
         await bot.pin_chat_message(
             chat_id=chat_id,
             message_id=message_to_pin.message_id,
-            disable_notification=True
+            disable_notification=True,
         )
     else:
-        base = original.split('|', 1)[1]
+        base = original.split("|", 1)[1]
         await bot.edit_message_text(
             text=f"📝{model_title} |{base}",
             chat_id=callback.message.chat.id,
@@ -421,7 +434,8 @@ async def on_models_toggle(callback: CallbackQuery):
     if callback.data == "models_info":
         models = await fetch_models()
         info_lines = [
-            f"*{m['name']}* – {m.get('description', '_без описания_')}\n" for m in models
+            f"*{m['name']}* – {m.get('description', '_без описания_')}\n"
+            for m in models
         ]
         new_text = f"ℹ️ *Список всех моделей:*\n\n" + "\n".join(info_lines)
         kb_new = toggle_button(kb_old, show=True)
@@ -497,16 +511,33 @@ async def cb_role_select(query: types.CallbackQuery, state: FSMContext):
         await query.answer("✅ Системный промпт обновлён")
         await show_roles_menu(query, state)
 
+import re
+
+def extract_and_strip_think(text: str) -> tuple[str, str]:
+    think_blocks = re.findall(r"<think\b[^>]*>([\s\S]*?)</think\s*>", text, flags=re.IGNORECASE)
+    think_text = ("\n\n".join(tb.strip() for tb in think_blocks)).strip()
+    visible_text = re.sub(r"<think\b[^>]*>[\s\S]*?</think\s*>", "", text, flags=re.IGNORECASE).strip()
+    return visible_text, think_text
+
+def is_blank_simple(s: str) -> bool:
+    if s is None:
+        return True
+    s = str(s)
+    cleaned = re.sub(r'[\s\u00A0\u200B\u200C\u200D\u200E\u200F\uFEFF]+', '', s)
+    return cleaned == ''
+
+def escape_markdown_v2(text: str) -> str:
+    if text is None:
+        return ''
+    text = text.replace('\\', r'\\')
+    return re.sub(r'([_\*\[\]\(\)~`>#+\-=|{}.!])', r'\\\\\1', text)
+
 @dp.message(lambda m: m.text is not None and not m.text.startswith("/"))
 async def message_router(message: types.Message, state: FSMContext):
 
     data = await state.get_data()
     mode = data.get("mode")
     edit_target = data.get("edit_target")
-    target = await message.answer(
-        "Нейросеть думает🤔", parse_mode=ParseMode.MARKDOWN_V2
-    )
-    await bot.send_chat_action(chat_id=message.chat.id, action="typing")    
 
     if mode == "edit" and edit_target:
         new_title = message.text.strip()
@@ -525,13 +556,24 @@ async def message_router(message: types.Message, state: FSMContext):
         await message.answer("✅ Ваш системный промпт сохранён")
         await show_roles_menu(message, state)
         return
+    if data.get("is_locked") == True:
+        await message.answer("Дождитесь пожалуйста ответа модели")
+        return
+    await state.update_data(is_locked=True)
+    target = await message.answer(
+        "Нейросеть думает🤔", parse_mode=ParseMode.MARKDOWN_V2
+    )
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     chat_id = data.get("active_chat")
+    print(chat_id)
+
     payload = {
         "telegramId": message.from_user.id,
         "prompt": message.text,
     }
     if chat_id:
         payload["chatId"] = chat_id
+
 
     async with aiohttp.ClientSession() as session:
         try:
@@ -545,21 +587,184 @@ async def message_router(message: types.Message, state: FSMContext):
                         await message.answer(text)
                     return
 
-                result = await resp.json()
-                raw = result.get("content", "")
-                if result.get("type") == "image":
+                try:
+                    result = await resp.json()
+                    chat_id = result.get("chatId","0")
+                    await state.update_data(active_chat=chat_id)
+                    raw = result.get("content", "")
 
-                    photo = BufferedInputFile(base64.b64decode(raw), filename="gen.png")
-                    await message.answer_photo(photo)
-                else:
-                    if isinstance(raw, (tuple, list)) and raw:
-                        raw = raw[0]
-                    safe_md = markdownify(raw)
+                    if isinstance(raw, (tuple, list)):
+                        raw = raw[0] if raw else "" 
+                    if not isinstance(raw, str):
+                        raw = str(raw) or "" 
+
+                    if result.get("type") == "image":
+                        photo = BufferedInputFile(base64.b64decode(raw), filename="gen.png")
+                        await message.answer_photo(photo)
+                    else:
+                        raw_visible, think_text = extract_and_strip_think(raw)
+                        clean = markdownify(raw_visible)
+
+                        if not is_blank_simple(think_text):
+                            try:
+                                final_text = make_final_text_by_truncating_hidden(clean, think_text, max_len=4096)
+                            except ValueError:
+                                final_text = clean[:4096]
+
+                            kb = toggle_think_buttons(InlineKeyboardMarkup(inline_keyboard=[]), show=False)
+                            await target.delete()
+                            await message.reply(final_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb)
+                        else:
+                            final_text = clean
+                            await target.delete()
+                            await message.reply(final_text, parse_mode=ParseMode.MARKDOWN_V2)
+                except Exception as e:
                     await target.delete()
-                    await message.reply(safe_md, parse_mode=ParseMode.MARKDOWN_V2)
+                    await message.answer(f"Ошибка обработки ответа: {e}. Попробуйте позже.")
         except ClientError as e:
             await target.delete()
             await message.answer(f"Сетевая ошибка: {e}")
+        finally:
+            await state.update_data(is_locked=False)
+
+
+
+import zlib
+import base64
+import html
+import json
+import binascii
+
+_ZW_MARKER = "\u2063\u2063\u2063"  
+_ZW_ZERO = "\u200B"  
+_ZW_ONE = "\u200C"   
+
+def _pack_bytes_to_zw(data: bytes) -> str:
+    comp = zlib.compress(data, level=6)
+    crc = binascii.crc32(data).to_bytes(4, "big")
+    full = crc + comp
+    b85 = base64.b85encode(full)
+    bits = "".join(f"{byte:08b}" for byte in b85)
+    return "".join(_ZW_ZERO if b == "0" else _ZW_ONE for b in bits)
+
+def _unpack_zw_to_bytes(s: str) -> bytes | None:
+    filtered = "".join(ch for ch in s if ch in (_ZW_ZERO, _ZW_ONE))
+    if not filtered:
+        return None
+    bits = "".join("0" if ch == _ZW_ZERO else "1" for ch in filtered)
+    if len(bits) % 8 != 0:
+        return None
+    byte_arr = bytes(int(bits[i:i+8], 2) for i in range(0, len(bits), 8))
+    try:
+        raw = base64.b85decode(byte_arr)
+        crc_recv = raw[:4]
+        comp = raw[4:]
+        data = zlib.decompress(comp)
+        if crc_recv != binascii.crc32(data).to_bytes(4, "big"):
+            return None
+        return data
+    except Exception:
+        return None
+
+def _embed_hidden(visible_text: str, hidden_bytes: bytes) -> str:
+    return visible_text + _ZW_MARKER + _pack_bytes_to_zw(hidden_bytes)
+
+def _extract_hidden(full_text: str):
+    if _ZW_MARKER not in full_text:
+        return full_text, None
+    visible, zw_part = full_text.split(_ZW_MARKER, 1)
+    return visible, zw_part
+
+def _make_hidden_payload(clean_text: str, think_text: str) -> bytes:
+    obj = {"clean": clean_text, "think": think_text}
+    return json.dumps(obj, ensure_ascii=False).encode("utf-8")
+
+def toggle_think_buttons(kb: InlineKeyboardMarkup, show: bool) -> InlineKeyboardMarkup:
+    kb.inline_keyboard = [[
+        InlineKeyboardButton(text="Скрыть размышления модели 💡" if show else "Показать размышления модели 💡", callback_data="think_hide" if show else "think_info")
+    ]]
+    return kb
+
+@dp.callback_query(lambda c: c.data in ("think_info", "think_hide"))
+async def on_think_toggle(callback: CallbackQuery):
+    msg = callback.message
+    if not msg or not msg.text:
+        await callback.answer("Нет текста сообщения.", show_alert=True)
+        return
+
+    visible, zw_part = _extract_hidden(msg.text)
+    hidden_obj = None
+    raw_bytes = _unpack_zw_to_bytes(zw_part) if zw_part else None
+    if raw_bytes:
+        try:
+            hidden_obj = json.loads(raw_bytes.decode("utf-8"))
+        except Exception:
+            hidden_obj = None
+
+    if callback.data == "think_info":
+        if not hidden_obj:
+            await callback.answer("Размышления не найдены или повреждены.", show_alert=True)
+            return
+        clean = hidden_obj.get("clean", visible) or ""
+        think = hidden_obj.get("think", "") or ""
+        new_text = f"{clean}\n\n💡 Размышления модели:\n{think}"
+        try:
+            new_text_with_hidden = make_final_text_by_truncating_hidden(new_text, think, max_len=4096)
+        except ValueError:
+            new_text_with_hidden = new_text[:4096]
+        kb_new = toggle_think_buttons(msg.reply_markup or InlineKeyboardMarkup(), show=True)
+        await msg.edit_text(new_text_with_hidden, reply_markup=kb_new)
+        await callback.answer()
+    else:
+        clean = (hidden_obj.get("clean", "") if hidden_obj else visible) or ""
+        think_part = hidden_obj.get("think", "") if hidden_obj else ""
+        try:
+            new_text_with_hidden = make_final_text_by_truncating_hidden(clean, think_part, max_len=4096)
+        except ValueError:
+            new_text_with_hidden = clean[:4096]
+        kb_new = toggle_think_buttons(msg.reply_markup or InlineKeyboardMarkup(), show=False)
+        await msg.edit_text(new_text_with_hidden, reply_markup=kb_new)
+        await callback.answer()
+
+def make_final_text_by_truncating_hidden(visible_text: str, think_text: str, max_len: int = 4096) -> str:
+
+    marker = _ZW_MARKER
+    space_for_zw = max_len - len(visible_text) - len(marker)
+    if space_for_zw <= 0:
+        raise ValueError("Нет места для невидимого блока.")
+
+    whole_bytes = _make_hidden_payload(visible_text, think_text)
+    whole_zw = _pack_bytes_to_zw(whole_bytes)
+    if len(whole_zw) <= space_for_zw:
+        return visible_text + marker + whole_zw
+
+    s = think_text or ""
+    lo, hi = 0, len(s)
+    best_zw = None
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        cand_think = s[:mid]
+        cand_bytes = _make_hidden_payload(visible_text, cand_think)
+        try:
+            cand_zw = _pack_bytes_to_zw(cand_bytes)
+        except Exception:
+            cand_zw = None
+
+        if cand_zw is not None and len(cand_zw) <= space_for_zw:
+            best_zw = cand_zw
+            lo = mid + 1
+        else:
+            hi = mid - 1
+
+    if best_zw is not None:
+        return visible_text + marker + best_zw
+
+    empty_bytes = _make_hidden_payload(visible_text, "")
+    empty_zw = _pack_bytes_to_zw(empty_bytes)
+    if len(empty_zw) <= space_for_zw:
+        return visible_text + marker + empty_zw
+
+    raise ValueError("Hidden payload too large even after truncation.")
 
 
 @dp.message(F.photo)
@@ -706,7 +911,7 @@ async def success_payment_handler(message: Message):
         safe_error = str(e).replace("=", "\\=").replace("_", "\\_")
         await message.answer(
             text=f"❗ Проблема при оплате: `{safe_error}`\nОбратитесь в поддержку: /paysupport",
-            parse_mode=ParseMode.MARKDOWN_V2
+            parse_mode=ParseMode.MARKDOWN_V2,
         )
 
 
