@@ -9,6 +9,7 @@ import { ModelsModule } from './models/models.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { sheduledEventsService } from './sheduledEvents/sheduledEvents.service';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
+import { ShortcutsModule } from './shortcuts/shortcuts.module';
 @Module({
   imports: [
     PrismaModule,
@@ -17,6 +18,7 @@ import { SubscriptionsModule } from './subscriptions/subscriptions.module';
     ChatsModule,
     ModelsModule,
     SubscriptionsModule,
+    ShortcutsModule,
     ScheduleModule.forRoot(),
   ],
   controllers: [AppController],

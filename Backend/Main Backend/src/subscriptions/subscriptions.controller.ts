@@ -1,13 +1,9 @@
 import { Body, Controller, Post } from '@nestjs/common';
-import { PrismaService } from 'prisma/prisma.service';
 import { SubscriptionsService } from './subscriptions.service';
 
 @Controller('subscriptions')
 export class SubscriptionsController {
-  constructor(
-    private prismaService: PrismaService,
-    private subscriptionsService: SubscriptionsService,
-  ) {}
+  constructor(private subscriptionsService: SubscriptionsService) {}
 
   @Post()
   newSubscription(

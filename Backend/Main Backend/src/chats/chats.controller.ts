@@ -10,7 +10,8 @@ import {
 } from '@nestjs/common';
 import { ChatsService } from './chats.service';
 export class ChatCreateDto {
-  telegramId: number;
+  userId: string;
+  title: string;
 }
 @Controller('chats')
 export class ChatsController {
@@ -18,7 +19,7 @@ export class ChatsController {
 
   @Post()
   createChat(@Body() dto: ChatCreateDto) {
-    return this.chatsService.createChat(dto);
+    return this.chatsService.createChat(dto.userId, dto.title);
   }
 
   @Get()

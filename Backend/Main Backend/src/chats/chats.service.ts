@@ -25,13 +25,13 @@ type ChatWithMessages = Prisma.ChatGetPayload<{
 export class ChatsService {
   constructor(private prisma: PrismaService) {}
 
-  async createChat(dto: any) {
+  async createChat(userId: string, title: string) {
     const chat = await this.prisma.chat.create({
       data: {
-        title: 'Тестовый чат',
+        title: title,
         type: false,
         users: {
-          connect: [{ id: dto }],
+          connect: [{ id: userId }],
         },
       },
     });

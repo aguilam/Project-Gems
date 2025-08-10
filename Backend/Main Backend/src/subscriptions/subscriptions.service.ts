@@ -23,6 +23,7 @@ export class SubscriptionsService {
       },
       update: {
         status: 'ACTIVE',
+        validUntil: validUntil,
       },
     });
 

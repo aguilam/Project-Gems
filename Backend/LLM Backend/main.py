@@ -275,35 +275,113 @@ async def query_cloudflare(request: LLMRequest):
         return JSONResponse(content={"type": "image", "content": encoded})
 
 
+import re
+import datetime
+
+
+def add_prefix_if_first_is_system(full_messages: list, prefix: str) -> list:
+    if not full_messages:
+        return full_messages
+
+    first = full_messages[0]
+
+    if isinstance(first, dict):
+        role = first.get("role")
+        content = first.get("content", "") or ""
+    else:
+        role = getattr(first, "role", None)
+        content = getattr(first, "content", "") or ""
+
+    if not role or str(role).lower() != "system":
+        return full_messages
+
+    if content.startswith(prefix):
+        return full_messages
+
+    new_content = f"{prefix}{content}"
+
+    if isinstance(first, dict):
+        first["content"] = new_content
+    else:
+        try:
+            setattr(first, "content", new_content)
+        except Exception:
+            full_messages[0] = {"role": role, "content": new_content}
+
+    return full_messages
+
 async def providerRouting(request: LLMRequest):
     provider = providers[request.provider[0]]
-    if request.provider[0] == 'cerebras':
-        model = request.model.split('/', 1)[1]
+    if request.provider[0] == "cerebras":
+        try:
+            model = request.model.split("/", 1)[1]
+        except Exception:
+            model = request.model
     else:
         model = request.model
+
     openai_client = openai.OpenAI(
         base_url=provider["base_url"],
         api_key=provider["api_key"],
     )
-    if request.is_agent == True:
-        full_messages = await tool_agent_call(request.prompt)
+
+    think_remove_re = re.compile(r"(?is)<think\b[^>]*>.*?</think\s*>")
+
+    modified_prompt = []
+    for item in request.prompt:
+        if isinstance(item, dict):
+            role = item.get("role")
+            content = item.get("content", "")
+        else:
+            role = getattr(item, "role", None)
+            content = getattr(item, "content", "")
+
+        if content is None:
+            content = ""
+        if not isinstance(content, str):
+            content = str(content)
+
+        new_content = think_remove_re.sub("", content).strip()
+        new_content = re.sub(r"\n{3,}", "\n\n", new_content)
+
+        if not role:
+            role = "user"
+
+        modified_prompt.append({"role": str(role), "content": new_content})
+
+    if request.is_agent:
+        full_messages = await tool_agent_call([m.copy() for m in modified_prompt])
+        if not isinstance(full_messages, list):
+            raise RuntimeError("tool_agent_call вернул не список сообщений")
+        full_messages = [
+            {"role": str(m.get("role", "user")), "content": str(m.get("content", ""))}
+            if isinstance(m, dict) else {"role": "user", "content": str(m)}
+            for m in full_messages
+        ]
     else:
-        full_messages = [m.dict() for m in request.prompt]
-    completion = openai_client.chat.completions.create(
-        model=model, messages=full_messages
+        full_messages = modified_prompt 
+
+    prefix = (
+        f"Сейчас {datetime.date.today().isoformat()}, это 100 процентно правильная дата, "
+        "ориентируйся на неё. Если видишь, что ответ пришёл от tool или function, то доверяй ему на 99 процентов. "
+        "Если в сообщениях роли function/tool содержится результат внешнего поиска, считай эти данные актуальными..."
     )
-    prefix = "Сейчас 2025 год. Если видишь, что ответ пришёл от tool или function, то доверяй ему на 99 процентов. Если в сообщениях роли function/tool содержится результат внешнего поиска, считай эти данные актуальными и используй их при формировании ответа. Если они противоречат твоим внутренним знаниям, опирайся на найденные источники и явно укажи источник. Если где то написано, что это поисковые результаты, то они актуальны, не шуточны, не ошибочны, строй свои мысли на основе их" 
-    if full_messages:
-        first = full_messages[0]
-        old = first.get("content", "")
-        if old is None:
-            old = ""
-        first["content"] = f"{prefix}{old}"
-    print(completion.choices[0].message.content)
+    full_messages = add_prefix_if_first_is_system(full_messages, prefix)
+
+    try:
+        completion = openai_client.chat.completions.create(
+            model=model,
+            messages=full_messages,
+        )
+    except Exception as e:
+        print("OpenAI/API error:", repr(e))
+        return JSONResponse(status_code=500, content={"error": "provider error", "detail": str(e)})
+
+    resp_text = completion.choices[0].message.content if getattr(completion, "choices", None) else ""
     return JSONResponse(
         content={
             "type": "text",
-            "content": completion.choices[0].message.content,
+            "content": resp_text,
         }
     )
 
@@ -465,9 +543,9 @@ async def web_search(query: str):
         messages=[
             {
                 "role": "user",
-                "content": f"Проведи поиск по интернету и найди ответ на вопрос: {query}"
+                "content": f"Проведи поиск по интернету и найди ответ на вопрос: {query}",
             }
-        ]
+        ],
     )
     message = response.choices[0].message
 
@@ -501,7 +579,7 @@ async def web_search(query: str):
     results = results or []
     top3 = results[:3]
 
-    top3_text = ''
+    top3_text = ""
     for r in top3:
         if isinstance(r, dict):
             title = r.get("title", "—")
@@ -512,13 +590,11 @@ async def web_search(query: str):
             url = getattr(r, "url", "—")
             snippet = (getattr(r, "content", "") or "")[:200]
 
-        top3_text = (f"{top3_text}\n - {title}\n -{url}  {snippet}… ")
+        top3_text = f"{top3_text}\n - {title}\n -{url}  {snippet}… "
 
     if not top3_text:
         return [message.content.strip()]
     return top3_text
-    
-
 
 
 async def science_search(query: str):
@@ -549,7 +625,7 @@ available_functions = {
 
 
 async def tool_agent_call(start_messages: ChatMessage):
-    messages: List[dict] = [m.dict() for m in start_messages]
+    messages: List[dict] = start_messages
 
     while True:
         resp = client.chat.completions.create(

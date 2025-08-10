@@ -52,10 +52,37 @@ export class MessagesService {
       if (!user) {
         throw new Error('Пользователь не найден');
       }
-
+      let fullPrompt = dto.prompt;
+      let ocrResult = '';
+      let fileRecognizeResult = '';
+      let modelId = user.defaultModelId;
+      const previousMessages: { content: string; role: string }[] = [];
+      if (dto.prompt.charAt(0) == '/') {
+        const trimmedPrompt = dto.prompt.trim();
+        const endCommandPosition = dto.prompt.indexOf(' ');
+        const userCommand = trimmedPrompt.slice(0, endCommandPosition);
+        fullPrompt = trimmedPrompt.slice(
+          endCommandPosition,
+          trimmedPrompt.length,
+        );
+        const shortcut = await this.prisma.shortcut.findFirst({
+          where: {
+            userId: user?.id,
+            command: userCommand,
+          },
+        });
+        if (shortcut) {
+          fullPrompt = `${shortcut.instruction} ${fullPrompt}`;
+          modelId = shortcut?.modelId;
+        }
+      }
+      previousMessages.push({
+        content: user.systemPrompt,
+        role: 'system',
+      });
       const model = await this.prisma.aIModel.findUnique({
         where: {
-          id: user.defaultModelId,
+          id: modelId,
         },
       });
 
@@ -76,10 +103,6 @@ export class MessagesService {
         );
       }
 
-      let fullPrompt = '';
-      let ocrResult = '';
-      let fileRecognizeResult = '';
-
       if (dto.image) {
         ocrResult = await this.ocrService.imageOcr(dto.image);
       }
@@ -94,16 +117,8 @@ export class MessagesService {
         fullPrompt = `${ocrResult}\n\n${dto.prompt}`;
       } else if (!(fileRecognizeResult.trim() == '')) {
         fullPrompt = `${fileRecognizeResult}\n\n${dto.prompt}`;
-      } else {
-        fullPrompt = dto.prompt;
       }
       let chat;
-      const previousMessages: { content: string; role: string }[] = [
-        {
-          content: user.systemPrompt,
-          role: 'system',
-        },
-      ];
       if (dto.chatId && !(dto.chatId == '0')) {
         chat = await this.chatsService.getChatById(dto.chatId);
         if (!chat) {
@@ -117,7 +132,30 @@ export class MessagesService {
           });
         }
       } else {
-        chat = await this.chatsService.createChat(user?.id);
+        const response = await axios.post(
+          'http://127.0.0.1:8000/llm',
+          {
+            prompt: [
+              {
+                role: 'user',
+                content: `Придумай название чата в пяти словах на основе этого сообщения, используй только слова, без смайликов, и символов типа "'/:}[] - "${dto.prompt}"`,
+              },
+            ],
+            model: 'llama3.3-70b',
+            provider: ['cerebras'],
+            premium: true,
+            is_agent: false,
+          },
+          {
+            headers: {
+              'X-User-Id': 'system',
+            },
+          },
+        );
+        chat = await this.chatsService.createChat(
+          user?.id,
+          response.data.content as string,
+        );
       }
       if (!(fileRecognizeResult.trim() == '') && dto.isForwarded == true) {
         return {

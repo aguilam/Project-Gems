@@ -301,7 +301,7 @@ async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
                     message_id=pinned.message_id,
                 )
             except Exception as e:
-                return 'bad'
+                return print(e)
 
         await state.update_data(active_chat=chat_id)
         await query.answer(f"✅ Активный чат: {chat_id}")
@@ -374,7 +374,58 @@ async def on_models_command(message: types.Message):
     )
 
     await message.answer("Выберите модель:", reply_markup=kb)
+async def fetch_shortcuts(telegram_id: int) -> dict:
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"{API_URL}/shortcuts?telegramId={telegram_id}") as resp:
+            resp.raise_for_status()
+            return await resp.json()
 
+@dp.message(Command(commands=["shortcuts"]))
+async def shortcuts_command(message: types.Message, state: FSMContext):
+    try:
+        user_shortcuts = await fetch_shortcuts(message.from_user.id)
+    except Exception as e:
+        await message.answer(f"Не удалось получить список шорткатов: {e}")
+        return
+    data = await state.get_data()
+    shortcut_mode = data.get("shortcut_mode")
+    rows: list[list[InlineKeyboardButton]] = []
+    for shortcut in user_shortcuts:
+        label = shortcut.get("command") or shortcut["id"][:8]
+
+        if shortcut_mode == "delete":
+            label += " 🗑"
+        elif shortcut_mode == "edit":
+            label += " ✏️"
+
+        rows.append(
+            [InlineKeyboardButton(text=label, callback_data=f"shortcut_sel:{shortcut["id"]}")]
+        )
+
+    #if shortcut_mode is None:
+    #    rows.append(
+    #        [
+    #            InlineKeyboardButton(text="✏️ Редактировать", callback_data="shortcut_mode:edit"),
+    #            InlineKeyboardButton(text="🗑 Удалить", callback_data="shortcut_mode:delete"),
+    #        ]
+    #    )
+    #else:
+    #    rows.append(
+    #        [InlineKeyboardButton(text="↩️ Отменить", callback_data="shortcut_mode:cancel")]
+    #    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+
+    text_map = {
+        None: "Выберите шорткат:",
+        "delete": "Режим удаления. Выберите шорткат:",
+        "edit": "Режим переименования. Выберите шорткат:",
+    }
+    text = text_map[shortcut_mode]
+
+    await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+    await state.update_data(shortcut_mode='edit')
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("model_select:"))
 async def on_model_selected(callback: CallbackQuery):
@@ -531,8 +582,8 @@ def escape_markdown_v2(text: str) -> str:
         return ''
     text = text.replace('\\', r'\\')
     return re.sub(r'([_\*\[\]\(\)~`>#+\-=|{}.!])', r'\\\\\1', text)
-
-@dp.message(lambda m: m.text is not None and not m.text.startswith("/"))
+forbidden_commands = {"/chats","/models","/role","/start", "/pro","/suppport","/shortcuts"}
+@dp.message(lambda m: m.text is not None and m.text not in forbidden_commands)
 async def message_router(message: types.Message, state: FSMContext):
 
     data = await state.get_data()
@@ -565,7 +616,6 @@ async def message_router(message: types.Message, state: FSMContext):
     )
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     chat_id = data.get("active_chat")
-    print(chat_id)
 
     payload = {
         "telegramId": message.from_user.id,
@@ -589,8 +639,8 @@ async def message_router(message: types.Message, state: FSMContext):
 
                 try:
                     result = await resp.json()
-                    chat_id = result.get("chatId","0")
-                    await state.update_data(active_chat=chat_id)
+                    response_chat_id = result.get("chatId","0")
+                    await state.update_data(active_chat=response_chat_id)
                     raw = result.get("content", "")
 
                     if isinstance(raw, (tuple, list)):

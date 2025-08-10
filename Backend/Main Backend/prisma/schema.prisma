@@ -21,6 +21,7 @@ model User {
   chats            Chat[]
   Messages         Message[]
   subscription     Subscription?
+  Shortcuts        Shortcut[]
 }
 
 model Chat {
@@ -34,7 +35,7 @@ model Chat {
 }
 
 model AIModel {
-  id          String    @id @default(uuid())
+  id          String     @id @default(uuid())
   name        String
   systemName  String
   description String?
@@ -43,6 +44,7 @@ model AIModel {
   provider    String[]
   Message     Message[]
   User        User[]
+  Shortcut    Shortcut[]
 }
 
 model Message {
@@ -72,6 +74,16 @@ model Subscription {
   providerPaymentId String
 
   @@index([userId])
+}
+
+model Shortcut {
+  id          String  @id @unique @default(uuid())
+  instruction String
+  command     String
+  modelId     String
+  model       AIModel @relation(fields: [modelId], references: [id])
+  userId      String
+  User        User    @relation(fields: [userId], references: [id])
 }
 
 enum SubscriptionStatus {
