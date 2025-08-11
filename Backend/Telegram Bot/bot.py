@@ -379,7 +379,7 @@ async def fetch_shortcuts(telegram_id: int) -> dict:
         async with session.get(f"{API_URL}/shortcuts?telegramId={telegram_id}") as resp:
             resp.raise_for_status()
             return await resp.json()
-
+        
 @dp.message(Command(commands=["shortcuts"]))
 async def shortcuts_command(message: types.Message, state: FSMContext):
     try:
@@ -392,40 +392,63 @@ async def shortcuts_command(message: types.Message, state: FSMContext):
     rows: list[list[InlineKeyboardButton]] = []
     for shortcut in user_shortcuts:
         label = shortcut.get("command") or shortcut["id"][:8]
-
-        if shortcut_mode == "delete":
-            label += " 🗑"
-        elif shortcut_mode == "edit":
-            label += " ✏️"
+        id = shortcut.get("id")
 
         rows.append(
-            [InlineKeyboardButton(text=label, callback_data=f"shortcut_sel:{shortcut["id"]}")]
+            [InlineKeyboardButton(text=label, callback_data=f"shortcut-sel_{id}")]
         )
-
-    #if shortcut_mode is None:
-    #    rows.append(
-    #        [
-    #            InlineKeyboardButton(text="✏️ Редактировать", callback_data="shortcut_mode:edit"),
-    #            InlineKeyboardButton(text="🗑 Удалить", callback_data="shortcut_mode:delete"),
-    #        ]
-    #    )
-    #else:
-    #    rows.append(
-    #        [InlineKeyboardButton(text="↩️ Отменить", callback_data="shortcut_mode:cancel")]
-    #    )
 
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
 
     text_map = {
-        None: "Выберите шорткат:",
-        "delete": "Режим удаления. Выберите шорткат:",
-        "edit": "Режим переименования. Выберите шорткат:",
+        None: "Выберите шорткат:"
     }
     text = text_map[shortcut_mode]
 
     await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
     await state.update_data(shortcut_mode='edit')
+
+async def fetch_shortcut(id: int) -> dict:
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"{API_URL}/shortcuts/{id}") as resp:
+            resp.raise_for_status()
+            return await resp.json()
+        
+@dp.callback_query(lambda c: c.data and c.data.startswith("shortcut-sel_"))
+async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
+    await query.answer()
+
+    shortcut_id = query.data.split("_", 1)[1].lstrip(':')
+
+    shortcut = await fetch_shortcut(shortcut_id)
+    if not shortcut:
+        await query.message.answer("Шорткат не найден.")
+        return
+
+    data = await state.get_data()
+    mode = data.get("shortcut_mode")
+
+    command = shortcut.get("command", "")
+    instruction = shortcut.get("instruction", "")
+    ai_model = shortcut.get("model") or {}
+    ai_model_name = ai_model.get("name", "(unknown)")
+
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text='✏️Изменить команду', callback_data=f"shortcut-edit_cmd_{shortcut_id}")],
+        [InlineKeyboardButton(text='✏️Изменить инструкцию', callback_data=f"shortcut-edit_instr_{shortcut_id}")],
+        [InlineKeyboardButton(text='✏️Изменить модель', callback_data=f"shortcut-edit_model_{shortcut_id}")],
+        [InlineKeyboardButton(text='🗑Удалить шорткат', callback_data=f"shortcut-delete_{shortcut_id}")]
+    ]
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+
+    short_cut_info = (
+        f"<b>Команда</b> - {html.escape(str(command))}\n"
+        f"<b>Инструкция</b> - {html.escape(str(instruction))}\n"
+        f"<b>ИИ-модель</b> - {html.escape(str(ai_model_name))}"
+    )
+
+    await query.message.edit_text(short_cut_info, parse_mode=ParseMode.HTML, reply_markup=kb)
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("model_select:"))
 async def on_model_selected(callback: CallbackQuery):

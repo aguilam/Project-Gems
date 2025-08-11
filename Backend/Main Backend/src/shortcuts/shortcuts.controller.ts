@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   Query,
 } from '@nestjs/common';
@@ -34,8 +35,27 @@ export class ShortcutsController {
     return userShortcuts;
   }
 
+  @Get(':id')
+  async getShortcutById(@Param('id') id: string) {
+    const shortcut = await this.shortcutService.getShortcutById(id);
+    return shortcut;
+  }
   @Delete(':id')
-  async deleteUserShortcut(@Param('id') id: string) {
+  async deleteShortcutById(@Param('id') id: string) {
     await this.shortcutService.deleteShortcutsById(id);
+  }
+
+  @Patch(':id')
+  async patchShortcutById(
+    @Param(':id')
+    @Body()
+    dto: {
+      id: string;
+      command: string;
+      modelId: string;
+      instruction: string;
+    },
+  ) {
+    await this.shortcutService.patchShortcutById(dto);
   }
 }

@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
 @Injectable()
 export class ShortcutsService {
@@ -67,6 +67,39 @@ export class ShortcutsService {
     await this.prismaService.shortcut.delete({
       where: {
         id: id,
+      },
+    });
+  }
+
+  async getShortcutById(id: string) {
+    const shortcut = await this.prismaService.shortcut.findUnique({
+      where: {
+        id: id,
+      },
+      include: {
+        model: true,
+      },
+    });
+    if (!shortcut) {
+      throw new NotFoundException(`Shortcut with id ${id} not found`);
+    }
+    return shortcut;
+  }
+
+  async patchShortcutById(dto: {
+    id: string;
+    command: string;
+    modelId: string;
+    instruction: string;
+  }) {
+    await this.prismaService.shortcut.update({
+      where: {
+        id: dto.id,
+      },
+      data: {
+        command: dto.command,
+        modelId: dto.modelId,
+        instruction: dto.instruction,
       },
     });
   }
