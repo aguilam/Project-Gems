@@ -289,7 +289,7 @@ async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
                 )
                 return
             except Exception as e:
-                return 'bad'
+                return "bad"
         else:
             base = original.split("|", 1)[0]
             new_text = f"{base}| 💭{chat_title}"
@@ -339,6 +339,7 @@ def is_user_premium(user: dict) -> bool:
     else:
         return True
 
+
 def build_keyboard(
     models: list[dict], selected_id: str | None, user_premium: bool
 ) -> InlineKeyboardMarkup:
@@ -374,12 +375,15 @@ async def on_models_command(message: types.Message):
     )
 
     await message.answer("Выберите модель:", reply_markup=kb)
+
+
 async def fetch_shortcuts(telegram_id: int) -> dict:
     async with aiohttp.ClientSession() as session:
         async with session.get(f"{API_URL}/shortcuts?telegramId={telegram_id}") as resp:
             resp.raise_for_status()
             return await resp.json()
-        
+
+
 @dp.message(Command(commands=["shortcuts"]))
 async def shortcuts_command(message: types.Message, state: FSMContext):
     try:
@@ -400,26 +404,57 @@ async def shortcuts_command(message: types.Message, state: FSMContext):
 
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
 
-    text_map = {
-        None: "Выберите шорткат:"
-    }
+    text_map = {None: "Выберите шорткат:"}
     text = text_map[shortcut_mode]
 
     await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
-    await state.update_data(shortcut_mode='edit')
+    await state.update_data(shortcut_mode="edit")
+
 
 async def fetch_shortcut(id: int) -> dict:
     async with aiohttp.ClientSession() as session:
         async with session.get(f"{API_URL}/shortcuts/{id}") as resp:
             resp.raise_for_status()
             return await resp.json()
-        
+
+
+@dp.message(Command(commands=["help", "paysupport", "suggestion", "bug", "support"]))
+async def help_form(message: types.Message):
+    text = (
+        "*Есть предложение\, проблема или может нашли баг?*\n\n"
+        "О них вы можете сообщить\, заполнив полностью анонимную анкету ниже\:\n\n"
+        "https://forms\.gle/Cwb4PJMnSJ8ZeEgo7\n"
+    )
+    await message.answer(text=text, parse_mode=ParseMode.MARKDOWN_V2)
+
+from datetime import datetime, date
+
+@dp.message(Command(commands=["profile"]))
+async def help_form(message: types.Message):
+    user = await fetch_user(message.from_user.id)
+    user_is_premium = is_user_premium(user)
+    subscription_name = "Free"
+    user_id = user.get("telegramId")
+    subscription_expired = "-"
+    if user_is_premium != False:
+        user_subscription = user.get("subscription")
+        subscription_name = "Pro"
+        subscription_expired = datetime.fromisoformat(user_subscription.get("validUntil"))
+        subscription_expired_normalized_time = subscription_expired.strftime("%d.%m.%Y")
+    user_model = user.get("defaultModel")
+    user_model_name = user_model.get("name")
+    user_free_questions = user.get("freeQuestions")
+    user_premium_questions = user.get("premiumQuestions")
+    text = f"<b>👤ID:</b> {user_id} \n <b>⭐️Тип подписки:</b> {subscription_name} \n <b>📆Действует до:</b> {subscription_expired_normalized_time} \n\n ———————————————— \n\n <b>🤖Текущая модель:</b> {user_model_name} \n <b>✨Премиум вопросы:</b> {user_premium_questions} \n <b>❔Обычные вопросы:</b> {user_free_questions} "
+    await message.answer(text=text, parse_mode=ParseMode.HTML)
+
+
 @dp.callback_query(lambda c: c.data and c.data.startswith("shortcut-sel_"))
 async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
     await query.answer()
 
-    shortcut_id = query.data.split("_", 1)[1].lstrip(':')
+    shortcut_id = query.data.split("_", 1)[1].lstrip(":")
 
     shortcut = await fetch_shortcut(shortcut_id)
     if not shortcut:
@@ -435,10 +470,29 @@ async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
     ai_model_name = ai_model.get("name", "(unknown)")
 
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text='✏️Изменить команду', callback_data=f"shortcut-edit_cmd_{shortcut_id}")],
-        [InlineKeyboardButton(text='✏️Изменить инструкцию', callback_data=f"shortcut-edit_instr_{shortcut_id}")],
-        [InlineKeyboardButton(text='✏️Изменить модель', callback_data=f"shortcut-edit_model_{shortcut_id}")],
-        [InlineKeyboardButton(text='🗑Удалить шорткат', callback_data=f"shortcut-delete_{shortcut_id}")]
+        [
+            InlineKeyboardButton(
+                text="✏️Изменить команду",
+                callback_data=f"shortcut-edit_cmd_{shortcut_id}",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="✏️Изменить инструкцию",
+                callback_data=f"shortcut-edit_instr_{shortcut_id}",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="✏️Изменить модель",
+                callback_data=f"shortcut-edit_model_{shortcut_id}",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="🗑Удалить шорткат", callback_data=f"shortcut-delete_{shortcut_id}"
+            )
+        ],
     ]
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -448,7 +502,10 @@ async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
         f"<b>ИИ-модель</b> - {html.escape(str(ai_model_name))}"
     )
 
-    await query.message.edit_text(short_cut_info, parse_mode=ParseMode.HTML, reply_markup=kb)
+    await query.message.edit_text(
+        short_cut_info, parse_mode=ParseMode.HTML, reply_markup=kb
+    )
+
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("model_select:"))
 async def on_model_selected(callback: CallbackQuery):
@@ -585,27 +642,47 @@ async def cb_role_select(query: types.CallbackQuery, state: FSMContext):
         await query.answer("✅ Системный промпт обновлён")
         await show_roles_menu(query, state)
 
+
 import re
 
+
 def extract_and_strip_think(text: str) -> tuple[str, str]:
-    think_blocks = re.findall(r"<think\b[^>]*>([\s\S]*?)</think\s*>", text, flags=re.IGNORECASE)
+    think_blocks = re.findall(
+        r"<think\b[^>]*>([\s\S]*?)</think\s*>", text, flags=re.IGNORECASE
+    )
     think_text = ("\n\n".join(tb.strip() for tb in think_blocks)).strip()
-    visible_text = re.sub(r"<think\b[^>]*>[\s\S]*?</think\s*>", "", text, flags=re.IGNORECASE).strip()
+    visible_text = re.sub(
+        r"<think\b[^>]*>[\s\S]*?</think\s*>", "", text, flags=re.IGNORECASE
+    ).strip()
     return visible_text, think_text
+
 
 def is_blank_simple(s: str) -> bool:
     if s is None:
         return True
     s = str(s)
-    cleaned = re.sub(r'[\s\u00A0\u200B\u200C\u200D\u200E\u200F\uFEFF]+', '', s)
-    return cleaned == ''
+    cleaned = re.sub(r"[\s\u00A0\u200B\u200C\u200D\u200E\u200F\uFEFF]+", "", s)
+    return cleaned == ""
+
 
 def escape_markdown_v2(text: str) -> str:
     if text is None:
-        return ''
-    text = text.replace('\\', r'\\')
-    return re.sub(r'([_\*\[\]\(\)~`>#+\-=|{}.!])', r'\\\\\1', text)
-forbidden_commands = {"/chats","/models","/role","/start", "/pro","/suppport","/shortcuts"}
+        return ""
+    text = text.replace("\\", r"\\")
+    return re.sub(r"([_\*\[\]\(\)~`>#+\-=|{}.!])", r"\\\\\1", text)
+
+
+forbidden_commands = {
+    "/chats",
+    "/models",
+    "/role",
+    "/start",
+    "/pro",
+    "/suppport",
+    "/shortcuts",
+}
+
+
 @dp.message(lambda m: m.text is not None and m.text not in forbidden_commands)
 async def message_router(message: types.Message, state: FSMContext):
 
@@ -647,7 +724,6 @@ async def message_router(message: types.Message, state: FSMContext):
     if chat_id:
         payload["chatId"] = chat_id
 
-
     async with aiohttp.ClientSession() as session:
         try:
             async with session.post(f"{API_URL}/messages", json=payload) as resp:
@@ -662,17 +738,19 @@ async def message_router(message: types.Message, state: FSMContext):
 
                 try:
                     result = await resp.json()
-                    response_chat_id = result.get("chatId","0")
+                    response_chat_id = result.get("chatId", "0")
                     await state.update_data(active_chat=response_chat_id)
                     raw = result.get("content", "")
 
                     if isinstance(raw, (tuple, list)):
-                        raw = raw[0] if raw else "" 
+                        raw = raw[0] if raw else ""
                     if not isinstance(raw, str):
-                        raw = str(raw) or "" 
+                        raw = str(raw) or ""
 
                     if result.get("type") == "image":
-                        photo = BufferedInputFile(base64.b64decode(raw), filename="gen.png")
+                        photo = BufferedInputFile(
+                            base64.b64decode(raw), filename="gen.png"
+                        )
                         await message.answer_photo(photo)
                     else:
                         raw_visible, think_text = extract_and_strip_think(raw)
@@ -680,26 +758,37 @@ async def message_router(message: types.Message, state: FSMContext):
 
                         if not is_blank_simple(think_text):
                             try:
-                                final_text = make_final_text_by_truncating_hidden(clean, think_text, max_len=4096)
+                                final_text = make_final_text_by_truncating_hidden(
+                                    clean, think_text, max_len=4096
+                                )
                             except ValueError:
                                 final_text = clean[:4096]
 
-                            kb = toggle_think_buttons(InlineKeyboardMarkup(inline_keyboard=[]), show=False)
+                            kb = toggle_think_buttons(
+                                InlineKeyboardMarkup(inline_keyboard=[]), show=False
+                            )
                             await target.delete()
-                            await message.reply(final_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kb)
+                            await message.reply(
+                                final_text,
+                                parse_mode=ParseMode.MARKDOWN_V2,
+                                reply_markup=kb,
+                            )
                         else:
                             final_text = clean
                             await target.delete()
-                            await message.reply(final_text, parse_mode=ParseMode.MARKDOWN_V2)
+                            await message.reply(
+                                final_text, parse_mode=ParseMode.MARKDOWN_V2
+                            )
                 except Exception as e:
                     await target.delete()
-                    await message.answer(f"Ошибка обработки ответа: {e}. Попробуйте позже.")
+                    await message.answer(
+                        f"Ошибка обработки ответа: {e}. Попробуйте позже."
+                    )
         except ClientError as e:
             await target.delete()
             await message.answer(f"Сетевая ошибка: {e}")
         finally:
             await state.update_data(is_locked=False)
-
 
 
 import zlib
@@ -708,9 +797,10 @@ import html
 import json
 import binascii
 
-_ZW_MARKER = "\u2063\u2063\u2063"  
-_ZW_ZERO = "\u200B"  
-_ZW_ONE = "\u200C"   
+_ZW_MARKER = "\u2063\u2063\u2063"
+_ZW_ZERO = "\u200b"
+_ZW_ONE = "\u200c"
+
 
 def _pack_bytes_to_zw(data: bytes) -> str:
     comp = zlib.compress(data, level=6)
@@ -720,6 +810,7 @@ def _pack_bytes_to_zw(data: bytes) -> str:
     bits = "".join(f"{byte:08b}" for byte in b85)
     return "".join(_ZW_ZERO if b == "0" else _ZW_ONE for b in bits)
 
+
 def _unpack_zw_to_bytes(s: str) -> bytes | None:
     filtered = "".join(ch for ch in s if ch in (_ZW_ZERO, _ZW_ONE))
     if not filtered:
@@ -727,7 +818,7 @@ def _unpack_zw_to_bytes(s: str) -> bytes | None:
     bits = "".join("0" if ch == _ZW_ZERO else "1" for ch in filtered)
     if len(bits) % 8 != 0:
         return None
-    byte_arr = bytes(int(bits[i:i+8], 2) for i in range(0, len(bits), 8))
+    byte_arr = bytes(int(bits[i : i + 8], 2) for i in range(0, len(bits), 8))
     try:
         raw = base64.b85decode(byte_arr)
         crc_recv = raw[:4]
@@ -739,8 +830,10 @@ def _unpack_zw_to_bytes(s: str) -> bytes | None:
     except Exception:
         return None
 
+
 def _embed_hidden(visible_text: str, hidden_bytes: bytes) -> str:
     return visible_text + _ZW_MARKER + _pack_bytes_to_zw(hidden_bytes)
+
 
 def _extract_hidden(full_text: str):
     if _ZW_MARKER not in full_text:
@@ -748,15 +841,27 @@ def _extract_hidden(full_text: str):
     visible, zw_part = full_text.split(_ZW_MARKER, 1)
     return visible, zw_part
 
+
 def _make_hidden_payload(clean_text: str, think_text: str) -> bytes:
     obj = {"clean": clean_text, "think": think_text}
     return json.dumps(obj, ensure_ascii=False).encode("utf-8")
 
+
 def toggle_think_buttons(kb: InlineKeyboardMarkup, show: bool) -> InlineKeyboardMarkup:
-    kb.inline_keyboard = [[
-        InlineKeyboardButton(text="Скрыть размышления модели 💡" if show else "Показать размышления модели 💡", callback_data="think_hide" if show else "think_info")
-    ]]
+    kb.inline_keyboard = [
+        [
+            InlineKeyboardButton(
+                text=(
+                    "Скрыть размышления модели 💡"
+                    if show
+                    else "Показать размышления модели 💡"
+                ),
+                callback_data="think_hide" if show else "think_info",
+            )
+        ]
+    ]
     return kb
+
 
 @dp.callback_query(lambda c: c.data in ("think_info", "think_hide"))
 async def on_think_toggle(callback: CallbackQuery):
@@ -776,30 +881,43 @@ async def on_think_toggle(callback: CallbackQuery):
 
     if callback.data == "think_info":
         if not hidden_obj:
-            await callback.answer("Размышления не найдены или повреждены.", show_alert=True)
+            await callback.answer(
+                "Размышления не найдены или повреждены.", show_alert=True
+            )
             return
         clean = hidden_obj.get("clean", visible) or ""
         think = hidden_obj.get("think", "") or ""
         new_text = f"{clean}\n\n💡 Размышления модели:\n{think}"
         try:
-            new_text_with_hidden = make_final_text_by_truncating_hidden(new_text, think, max_len=4096)
+            new_text_with_hidden = make_final_text_by_truncating_hidden(
+                new_text, think, max_len=4096
+            )
         except ValueError:
             new_text_with_hidden = new_text[:4096]
-        kb_new = toggle_think_buttons(msg.reply_markup or InlineKeyboardMarkup(), show=True)
+        kb_new = toggle_think_buttons(
+            msg.reply_markup or InlineKeyboardMarkup(), show=True
+        )
         await msg.edit_text(new_text_with_hidden, reply_markup=kb_new)
         await callback.answer()
     else:
         clean = (hidden_obj.get("clean", "") if hidden_obj else visible) or ""
         think_part = hidden_obj.get("think", "") if hidden_obj else ""
         try:
-            new_text_with_hidden = make_final_text_by_truncating_hidden(clean, think_part, max_len=4096)
+            new_text_with_hidden = make_final_text_by_truncating_hidden(
+                clean, think_part, max_len=4096
+            )
         except ValueError:
             new_text_with_hidden = clean[:4096]
-        kb_new = toggle_think_buttons(msg.reply_markup or InlineKeyboardMarkup(), show=False)
+        kb_new = toggle_think_buttons(
+            msg.reply_markup or InlineKeyboardMarkup(), show=False
+        )
         await msg.edit_text(new_text_with_hidden, reply_markup=kb_new)
         await callback.answer()
 
-def make_final_text_by_truncating_hidden(visible_text: str, think_text: str, max_len: int = 4096) -> str:
+
+def make_final_text_by_truncating_hidden(
+    visible_text: str, think_text: str, max_len: int = 4096
+) -> str:
 
     marker = _ZW_MARKER
     space_for_zw = max_len - len(visible_text) - len(marker)
@@ -926,79 +1044,111 @@ async def handler_doc(message: types.message):
         await message.reply(f"Сетевая ошибка: {e}")
 
 
+PROVIDER_TOKEN = ""
+CURRENCY = "XTR"
+PRICE_MAIN_UNITS = 1
+import uuid
+from aiogram.types import (
+    LabeledPrice,
+    PreCheckoutQuery,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
-def payment_keyboard():
-    builder = InlineKeyboardBuilder()
-    builder.button(text=f"Оплатить 1 ⭐️", pay=True)
-
-    return builder.as_markup()
-
-
-from aiogram.types import LabeledPrice, Message
+def offer_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Перейти к оплате", callback_data="buy_premium")
+    return kb.as_markup()
 
 
-async def send_invoice_handler(message: Message):
-    prices = [LabeledPrice(label="XTR", amount=1)]
-    await message.answer_invoice(
-        title="Поддержка канала",
-        description="Поддержать канал на 1 звёзд!",
-        prices=prices,
+def invoice_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Оплатить 1 ⭐️", pay=True)
+    return kb.as_markup()
+
+
+@dp.message(Command(commands=["pro", "premium"]))
+async def send_offer(message: types.message):
+    text = (
+        "✨ Pro подписка — что вы получите:\n\n"
+        "• 1000 обычных и 120 премиум вопросов\n"
+        "• Доступ к премиум-моделям генерации текста и изображений\n"
+        "• Распознавание голосовых сообщений других пользователей\n"
+        "• Шорткаты для быстрого доступа\n"
+        "• Агентские функции (поиск, улучшенная память, запуск Python, модуль WolframAlpha)\n"
+        "• Получаете новые функции первыми\n\n"
+        "Нажмите «Оплатить», чтобы оформить подписку."
+    )
+    await message.answer(text=text, reply_markup=offer_keyboard())
+
+
+@dp.callback_query()
+async def callback_buy_premium(callback: CallbackQuery):
+    if callback.data != "buy_premium":
+        return
+
+    await callback.answer()
+
+    try:
+        await callback.message.edit_text(
+            callback.message.text + "\n\nПереходим к оплате…"
+        )
+    except Exception:
+        pass
+
+    order_payload = str(uuid.uuid4())
+
+    amount_smallest = int(PRICE_MAIN_UNITS)
+    prices = [LabeledPrice(label="Pro подписка", amount=amount_smallest)]
+
+    short_description = "Pro подписка — 1000 обычных + 120 премиум вопросов."
+
+    await bot.send_invoice(
+        chat_id=callback.from_user.id,
+        title="Оформить Pro подписку",
+        description=short_description,
+        payload=order_payload,
         provider_token="",
-        payload="channel_support",
-        currency="XTR",
-        reply_markup=payment_keyboard(),
+        currency=CURRENCY,
+        prices=prices,
+        reply_markup=invoice_keyboard(),
     )
 
 
-from aiogram.types import PreCheckoutQuery
-
-
+@dp.pre_checkout_query()
 async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery):
+
     await pre_checkout_query.answer(ok=True)
 
 
-async def success_payment_handler(message: Message):
+@dp.message(F.successful_payment)
+async def success_payment_handler(message: types.message):
     payment = message.successful_payment
-
-    telegram_charge_id = payment.telegram_payment_charge_id
-    provider_charge_id = payment.provider_payment_charge_id
+    order_payload = payment.invoice_payload
 
     user = await fetch_user(message.from_user.id)
     payment_info = {
         "userId": user.get("id", ""),
-        "telegramPaymentId": telegram_charge_id,
-        "providerPaymentId": provider_charge_id,
+        "telegramPaymentId": payment.telegram_payment_charge_id,
+        "providerPaymentId": payment.provider_payment_charge_id,
+        "orderPayload": order_payload,
     }
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{API_URL}/subscriptions", json=payment_info
             ) as resp:
                 resp.raise_for_status()
-                await message.answer(
-                    text="🥳Спасибо за вашу поддержку!🤗", parse_mode=None
-                )
+        await message.answer(
+            "🥳 Спасибо! Подписка оформлена — вы получили доступ к Pro."
+        )
     except Exception as e:
         safe_error = str(e).replace("=", "\\=").replace("_", "\\_")
         await message.answer(
-            text=f"❗ Проблема при оплате: `{safe_error}`\nОбратитесь в поддержку: /paysupport",
+            text=f"❗ Проблема при записи подписки: `{safe_error}`",
             parse_mode=ParseMode.MARKDOWN_V2,
         )
-
-
-async def pay_support_handler(message: Message):
-    await message.answer(
-        text="Добровольные пожертвования не подразумевают возврат средств, "
-        "однако, если вы очень хотите вернуть средства - свяжитесь с нами."
-    )
-
-
-dp.message.register(send_invoice_handler, Command(commands="pro"))
-dp.pre_checkout_query.register(pre_checkout_handler)
-dp.message.register(success_payment_handler, F.successful_payment)
-dp.message.register(pay_support_handler, Command(commands="paysupport"))
 
 
 async def main():

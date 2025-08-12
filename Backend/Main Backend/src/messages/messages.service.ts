@@ -49,6 +49,7 @@ export class MessagesService {
           subscription: true,
         },
       });
+
       if (!user) {
         throw new Error('Пользователь не найден');
       }
@@ -56,6 +57,7 @@ export class MessagesService {
       let ocrResult = '';
       let fileRecognizeResult = '';
       let modelId = user.defaultModelId;
+      let questionsCost = 0;
       const previousMessages: { content: string; role: string }[] = [];
       if (dto.prompt.charAt(0) == '/') {
         const trimmedPrompt = dto.prompt.trim();
@@ -76,14 +78,14 @@ export class MessagesService {
           modelId = shortcut?.modelId;
         }
       }
-      previousMessages.push({
-        content: user.systemPrompt,
-        role: 'system',
-      });
       const model = await this.prisma.aIModel.findUnique({
         where: {
           id: modelId,
         },
+      });
+      previousMessages.push({
+        content: user.systemPrompt,
+        role: 'system',
       });
 
       if (!model) {
@@ -94,13 +96,11 @@ export class MessagesService {
         model.premium &&
         (!(user.subscription?.status == 'ACTIVE') || user.premiumQuestions <= 0)
       ) {
-        throw new ForbiddenException('Пользователь не обладает premium');
+        throw new ForbiddenException('У вас закончились премиум вопросы');
       }
 
       if (!model.premium && user.freeQuestions <= 0) {
-        throw new ForbiddenException(
-          'У пользователя закончились бесплатные вопросы',
-        );
+        throw new ForbiddenException('У вас закончились бесплатные вопросы');
       }
 
       if (dto.image) {
@@ -111,6 +111,10 @@ export class MessagesService {
         fileRecognizeResult = await this.fileRecognizeService.recognize(
           dto.file,
         );
+
+        if (fileRecognizeResult && model.premium !== true) {
+          questionsCost++;
+        }
       }
 
       if (ocrResult) {
@@ -190,6 +194,12 @@ export class MessagesService {
           },
         },
       );
+      if (response) {
+        questionsCost++;
+        if (Number(response.headers['agent-use']) > 0) {
+          questionsCost++;
+        }
+      }
       const responseData: ResponseDTO = response.data;
       await this.prisma.message.create({
         data: {
@@ -207,7 +217,7 @@ export class MessagesService {
             telegramId: dto.telegramId,
           },
           data: {
-            premiumQuestions: user.premiumQuestions - 1,
+            premiumQuestions: user.premiumQuestions - questionsCost,
           },
         });
       } else {
@@ -216,7 +226,7 @@ export class MessagesService {
             telegramId: dto.telegramId,
           },
           data: {
-            freeQuestions: user.freeQuestions - 1,
+            freeQuestions: user.freeQuestions - questionsCost,
           },
         });
       }

@@ -310,8 +310,10 @@ def add_prefix_if_first_is_system(full_messages: list, prefix: str) -> list:
 
     return full_messages
 
+
 async def providerRouting(request: LLMRequest):
     provider = providers[request.provider[0]]
+    agent_use = 0
     if request.provider[0] == "cerebras":
         try:
             model = request.model.split("/", 1)[1]
@@ -354,12 +356,19 @@ async def providerRouting(request: LLMRequest):
         if not isinstance(full_messages, list):
             raise RuntimeError("tool_agent_call вернул не список сообщений")
         full_messages = [
-            {"role": str(m.get("role", "user")), "content": str(m.get("content", ""))}
-            if isinstance(m, dict) else {"role": "user", "content": str(m)}
+            (
+                {
+                    "role": str(m.get("role", "user")),
+                    "content": str(m.get("content", "")),
+                }
+                if isinstance(m, dict)
+                else {"role": "user", "content": str(m)}
+            )
             for m in full_messages
         ]
+        agent_use += 1
     else:
-        full_messages = modified_prompt 
+        full_messages = modified_prompt
 
     prefix = (
         f"Сейчас {datetime.date.today().isoformat()}, это 100 процентно правильная дата, "
@@ -367,24 +376,62 @@ async def providerRouting(request: LLMRequest):
         "Если в сообщениях роли function/tool содержится результат внешнего поиска, считай эти данные актуальными..."
     )
     full_messages = add_prefix_if_first_is_system(full_messages, prefix)
-
+    print(full_messages)
     try:
+        try:
+            safe_messages = sanitize_for_provider(full_messages)
+        except Exception as e:
+            print("Sanitization error:", repr(e))
+            return JSONResponse(status_code=500, content={"error": "sanitization_error", "detail": str(e)})
+
         completion = openai_client.chat.completions.create(
             model=model,
-            messages=full_messages,
+            messages=safe_messages,
         )
     except Exception as e:
         print("OpenAI/API error:", repr(e))
-        return JSONResponse(status_code=500, content={"error": "provider error", "detail": str(e)})
+        return JSONResponse(
+            status_code=500, content={"error": "provider error", "detail": str(e)}
+        )
 
-    resp_text = completion.choices[0].message.content if getattr(completion, "choices", None) else ""
+    resp_text = (
+        completion.choices[0].message.content
+        if getattr(completion, "choices", None)
+        else ""
+    )
     return JSONResponse(
         content={
             "type": "text",
             "content": resp_text,
-        }
+        },
+        headers={"Agent-Use": f'{agent_use}'},
     )
 
+from typing import Dict
+
+def sanitize_for_provider(messages: List[Dict]) -> List[Dict]:
+
+    out = []
+    for i, m in enumerate(messages):
+        role = (m.get("role") or "").lower()
+        content = m.get("content", "") or ""
+        base = {"role": role, "content": content}
+
+        if role == "tool":
+            tcid = m.get("tool_call_id") or m.get("toolCallId") or m.get("call_id")
+            if tcid:
+                nm = {"role": "tool", "content": content, "tool_call_id": str(tcid)}
+                if m.get("name"):
+                    nm["name"] = m.get("name")
+                out.append(nm)
+            else:
+
+                assistant_content = content
+
+                out.append({"role": "assistant", "content": assistant_content})
+        else:
+            out.append({"role": role, "content": content})
+    return out
 
 async def add_memory(memory: str, user_id: str | None = None):
     uid = user_id or current_user_id.get()

@@ -5,7 +5,7 @@ import { PrismaService } from 'prisma/prisma.service';
 export class sheduledEventsService {
   constructor(private prisma: PrismaService) {}
 
-  @Cron(CronExpression.EVERY_30_SECONDS)
+  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
   async handleCron() {
     const users = await this.prisma.user.findMany({
       select: { id: true, subscription: true },

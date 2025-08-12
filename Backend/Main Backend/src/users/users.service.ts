@@ -40,6 +40,7 @@ export class UsersService {
       where: { telegramId },
       include: {
         subscription: true,
+        defaultModel: true,
       },
     });
     return user;
