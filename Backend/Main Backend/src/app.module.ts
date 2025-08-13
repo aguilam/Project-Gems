@@ -10,6 +10,10 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { sheduledEventsService } from './sheduledEvents/sheduledEvents.service';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { ShortcutsModule } from './shortcuts/shortcuts.module';
+import { SentryModule } from '@sentry/nestjs/setup';
+import { APP_FILTER } from '@nestjs/core';
+import { SentryGlobalFilter } from '@sentry/nestjs/setup';
+
 @Module({
   imports: [
     PrismaModule,
@@ -20,8 +24,16 @@ import { ShortcutsModule } from './shortcuts/shortcuts.module';
     SubscriptionsModule,
     ShortcutsModule,
     ScheduleModule.forRoot(),
+    SentryModule.forRoot(),
   ],
   controllers: [AppController],
-  providers: [AppService, sheduledEventsService],
+  providers: [
+    AppService,
+    sheduledEventsService,
+    {
+      provide: APP_FILTER,
+      useClass: SentryGlobalFilter,
+    },
+  ],
 })
 export class AppModule {}

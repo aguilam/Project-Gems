@@ -310,11 +310,16 @@ def add_prefix_if_first_is_system(full_messages: list, prefix: str) -> list:
 
     return full_messages
 
+async def updateLimitsFile(headers, provider, model):
+    print(headers)
+async def keyRouting(provider: str):
+    print(provider)
+
 
 async def providerRouting(request: LLMRequest):
     provider = providers[request.provider[0]]
     agent_use = 0
-    if request.provider[0] == "cerebras":
+    if request.provider[0] != "groq":
         try:
             model = request.model.split("/", 1)[1]
         except Exception:
