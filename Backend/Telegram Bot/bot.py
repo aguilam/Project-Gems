@@ -179,6 +179,11 @@ async def show_chats_menu(target, state: FSMContext, mode: str = None):
         return
 
     rows: list[list[InlineKeyboardButton]] = []
+    rows.append(
+        [
+        InlineKeyboardButton(text="➕ Новый чат", callback_data="mode:new")
+        ]
+    )
     for chat in chats:
         label = chat.get("title") or chat["id"][:8]
 
@@ -233,6 +238,10 @@ async def cb_mode(query: types.CallbackQuery, state: FSMContext):
     if mode == "cancel":
         await state.update_data(mode="none")
         await show_chats_menu(query, state, mode=None)
+    if mode == 'new':
+        await state.update_data(mode="none")
+        await state.update_data(active_chat="0")
+        await query.message.answer(text="Введите своё первое сообщение для начала нового чата:")
     else:
         await show_chats_menu(query, state, mode=mode)
     await query.answer()
@@ -363,7 +372,7 @@ def build_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-@dp.message(Command(commands=["models"]))
+@dp.message(Command(commands=["models", "model"]))
 async def on_models_command(message: types.Message):
     telegram_id = message.from_user.id
     models, user = await asyncio.gather(fetch_models(), fetch_user(telegram_id))
@@ -428,7 +437,9 @@ async def help_form(message: types.Message):
     )
     await message.answer(text=text, parse_mode=ParseMode.MARKDOWN_V2)
 
+
 from datetime import datetime, date
+
 
 @dp.message(Command(commands=["profile"]))
 async def help_form(message: types.Message):
@@ -440,7 +451,9 @@ async def help_form(message: types.Message):
     if user_is_premium != False:
         user_subscription = user.get("subscription")
         subscription_name = "Pro"
-        subscription_expired = datetime.fromisoformat(user_subscription.get("validUntil"))
+        subscription_expired = datetime.fromisoformat(
+            user_subscription.get("validUntil")
+        )
         subscription_expired_normalized_time = subscription_expired.strftime("%d.%m.%Y")
     user_model = user.get("defaultModel")
     user_model_name = user_model.get("name")
@@ -739,6 +752,52 @@ async def message_router(message: types.Message, state: FSMContext):
                 try:
                     result = await resp.json()
                     response_chat_id = result.get("chatId", "0")
+                    actual_chat_id = data.get("active_chat")
+                    if response_chat_id != actual_chat_id:
+                        try:
+                            chats = await fetch_chats(message.from_user.id)
+                        except Exception as e:
+                            await message.answer(
+                                f"Не удалось получить список чатов: {e}", show_alert=True
+                            )
+                            return
+
+                        selected = next((c for c in chats if c["id"] == response_chat_id), None)
+                        chat_title = (
+                            selected.get("title") if selected and selected.get("title") else response_chat_id[:8]
+                        )
+
+                        chat: types.Chat = await bot.get_chat(message.chat.id)
+                        pinned: types.Message | None = chat.pinned_message
+
+                        # if not pinned:
+                        #    return await query.message.reply("В чате нет закреплённого сообщения.")
+
+                        original = pinned.text or pinned.caption or ""
+                        if "|" not in original:
+                            new_text = f"{original} | 💭{chat_title}"
+
+                            try:
+                                await bot.edit_message_text(
+                                    text=new_text,
+                                    chat_id=message.chat.id,
+                                    message_id=pinned.message_id,
+                                )
+                                return
+                            except Exception as e:
+                                return "bad"
+                        else:
+                            base = original.split("|", 1)[0]
+                            new_text = f"{base}| 💭{chat_title}"
+
+                            try:
+                                await bot.edit_message_text(
+                                    text=new_text,
+                                    chat_id=message.chat.id,
+                                    message_id=pinned.message_id,
+                                )
+                            except Exception as e:
+                                return print(e)
                     await state.update_data(active_chat=response_chat_id)
                     raw = result.get("content", "")
 

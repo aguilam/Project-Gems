@@ -26,15 +26,15 @@ load_dotenv()
 
 app = FastAPI()
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY_1", "")
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
 CLOUDFLARE_API_KEY = os.getenv("CLOUDFLARE_API_KEY", "")
-CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "")
+CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY_1", "")
 MEM0_API_KEY = os.getenv("MEM0_API_KEY", "")
 
 client = Cerebras(
-    api_key=os.environ.get("CEREBRAS_API_KEY"),
+    api_key=os.environ.get("CEREBRAS_API_KEY_1"),
 )
 
 
@@ -49,15 +49,20 @@ groqClient = Groq(
 providers = {
     "cerebras": {
         "base_url": "https://api.cerebras.ai/v1",
-        "api_key": os.environ.get("CEREBRAS_API_KEY"),
+        "api_key": os.environ.get("CEREBRAS_API_KEY_1"),
+        "api_key_2": os.environ.get("CEREBRAS_API_KEY_2"),
+        "api_key_3": os.environ.get("CEREBRAS_API_KEY_3"),
     },
     "groq": {
         "base_url": "https://api.groq.com/openai/v1",
-        "api_key": os.environ.get("GROQ_API_KEY"),
+        "api_key_1": os.environ.get("GROQ_API_KEY_1"),
+        "api_key_2": os.environ.get("GROQ_API_KEY_2"),
     },
     "openrouter": {
         "base_url": "https://openrouter.ai/api/v1",
-        "api_key": os.environ.get("OPENROUTER_API_KEY"),
+        "api_key1": os.environ.get("OPENROUTER_API_KEY_1"),
+        "api_key2": os.environ.get("OPENROUTER_API_KEY_2"),
+        "api_key3": os.environ.get("OPENROUTER_API_KEY_3"),
     },
 }
 
@@ -278,6 +283,7 @@ async def query_cloudflare(request: LLMRequest):
 import re
 import datetime
 
+from typing import Any, Dict, List, Optional
 
 def add_prefix_if_first_is_system(full_messages: list, prefix: str) -> list:
     if not full_messages:
@@ -310,15 +316,144 @@ def add_prefix_if_first_is_system(full_messages: list, prefix: str) -> list:
 
     return full_messages
 
-async def updateLimitsFile(headers, provider, model):
-    print(headers)
-async def keyRouting(provider: str):
-    print(provider)
+
+def extract_api_keys_from_provider_conf(conf: Dict[str, Any]) -> List[str]:
+    """Найти все поля, которые выглядят как api_key* и вернуть список непустых ключей в порядке обнаружения."""
+    keys = []
+    for k, v in conf.items():
+        kn = k.lower().replace("-", "_")
+        if kn.startswith("api_key") or kn.startswith("api") or "key" in kn:
+            if isinstance(v, str) and v.strip():
+                keys.append(v.strip())
+    return keys
+
+
+def detect_status_from_exception(e: Exception) -> Optional[int]:
+    """Пытаемся извлечь HTTP-код из разных атрибутов/response/текста."""
+    for attr in ("http_status", "status_code", "code"):
+        val = getattr(e, attr, None)
+        if isinstance(val, int):
+            return val
+        if isinstance(val, str) and val.isdigit():
+            return int(val)
+    resp = getattr(e, "response", None)
+    if resp is not None:
+        sc = getattr(resp, "status_code", None) or getattr(resp, "status", None)
+        try:
+            if isinstance(sc, int):
+                return sc
+            if isinstance(sc, str) and sc.isdigit():
+                return int(sc)
+        except Exception:
+            pass
+    m = re.search(r"\b(4\d{2}|5\d{2})\b", str(e))
+    if m:
+        try:
+            return int(m.group(1))
+        except Exception:
+            pass
+    return None
+
+
+def extract_headers_from_exception(e: Exception) -> Dict[str, str]:
+    """Попытаться достать headers из exception.response или e.headers."""
+    hdrs: Dict[str, str] = {}
+    resp = getattr(e, "response", None)
+    if resp is not None:
+        try:
+            raw = getattr(resp, "headers", None)
+            if raw:
+                for k, v in raw.items():
+                    hdrs[k.lower()] = v
+                return hdrs
+        except Exception:
+            pass
+    try:
+        raw = getattr(e, "headers", None)
+        if raw:
+            for k, v in raw.items():
+                hdrs[k.lower()] = v
+            return hdrs
+    except Exception:
+        pass
+    return hdrs
+
+
+def parse_retry_seconds_from_headers(hdrs: Dict[str, str]) -> Optional[float]:
+    """
+    Парсинг retry time из заголовков:
+      - retry-after (секунды или HTTP-date)
+      - x-ratelimit-reset-tokens*, x-ratelimit-reset-requests*, x-ratelimit-reset*
+    """
+    if not hdrs:
+        return None
+
+    def parse_time_value(v: str) -> Optional[float]:
+        if not v:
+            return None
+        s = v.strip().lower()
+        if re.match(r"^\d+(\.\d+)?$", s):
+            return float(s)
+        total = 0.0
+        found = False
+        for val, unit in re.findall(r"(\d+(?:\.\d+)?)([smh])", s):
+            found = True
+            fv = float(val)
+            if unit == "s":
+                total += fv
+            elif unit == "m":
+                total += fv * 60
+            elif unit == "h":
+                total += fv * 3600
+        if found:
+            return total
+        try:
+            from email.utils import parsedate_to_datetime
+            dt = parsedate_to_datetime(v)
+            if dt is not None:
+                now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
+                delta = (dt - now).total_seconds()
+                return max(delta, 0.0)
+        except Exception:
+            pass
+        return None
+
+    ra = hdrs.get("retry-after")
+    if ra:
+        val = parse_time_value(ra)
+        if val is not None:
+            return val
+
+    for key in (
+        "x-ratelimit-reset-tokens",
+        "x-ratelimit-reset-requests",
+        "x-ratelimit-reset-tokens-minute",
+        "x-ratelimit-reset-requests-minute",
+        "x-ratelimit-reset",
+    ):
+        v = hdrs.get(key)
+        if v:
+            val = parse_time_value(v)
+            if val is not None:
+                return val
+
+    return None
+
+import logging
+from typing import Any, Dict, List, Optional
+import asyncio
+
+async def _call_completion_with_flex(client, model: str, messages: List[Dict[str, str]]):
+    res = client.chat.completions.create(model=model, messages=messages)
+    if asyncio.iscoroutine(res):
+        return await res
+    return await asyncio.to_thread(lambda: res)
 
 
 async def providerRouting(request: LLMRequest):
     provider = providers[request.provider[0]]
     agent_use = 0
+
     if request.provider[0] != "groq":
         try:
             model = request.model.split("/", 1)[1]
@@ -326,11 +461,6 @@ async def providerRouting(request: LLMRequest):
             model = request.model
     else:
         model = request.model
-
-    openai_client = openai.OpenAI(
-        base_url=provider["base_url"],
-        api_key=provider["api_key"],
-    )
 
     think_remove_re = re.compile(r"(?is)<think\b[^>]*>.*?</think\s*>")
 
@@ -381,38 +511,92 @@ async def providerRouting(request: LLMRequest):
         "Если в сообщениях роли function/tool содержится результат внешнего поиска, считай эти данные актуальными..."
     )
     full_messages = add_prefix_if_first_is_system(full_messages, prefix)
-    print(full_messages)
+
     try:
-        try:
-            safe_messages = sanitize_for_provider(full_messages)
-        except Exception as e:
-            print("Sanitization error:", repr(e))
-            return JSONResponse(status_code=500, content={"error": "sanitization_error", "detail": str(e)})
-
-        completion = openai_client.chat.completions.create(
-            model=model,
-            messages=safe_messages,
-        )
+        safe_messages = sanitize_for_provider(full_messages)
     except Exception as e:
-        print("OpenAI/API error:", repr(e))
+        print("Sanitization error:", repr(e))
         return JSONResponse(
-            status_code=500, content={"error": "provider error", "detail": str(e)}
+            status_code=500,
+            content={"error": "sanitization_error", "detail": str(e)},
         )
 
-    resp_text = (
-        completion.choices[0].message.content
-        if getattr(completion, "choices", None)
-        else ""
-    )
-    return JSONResponse(
-        content={
-            "type": "text",
-            "content": resp_text,
-        },
-        headers={"Agent-Use": f'{agent_use}'},
-    )
+    api_keys = extract_api_keys_from_provider_conf(provider)
+    if not api_keys:
+        return JSONResponse(status_code=500, content={"error": "no_api_keys", "detail": "no api keys found for provider"})
+
+    max_rounds = 20  
+    per_key_backoff = 0.2  
+    round_index = 0
+    last_exception = None
+
+    while round_index < max_rounds:
+        round_index += 1
+        saw_retry_header = False
+        retry_seconds = None
+
+        for idx, api_key in enumerate(api_keys):
+            logging.debug("Trying provider %s key %d/%d (round %d)", request.provider[0], idx + 1, len(api_keys), round_index)
+            openai_client = openai.OpenAI(base_url=provider["base_url"], api_key=api_key)
+            try:
+                completion = await _call_completion_with_flex(openai_client, model, safe_messages)
+
+                resp_text = (
+                    completion.choices[0].message.content
+                    if getattr(completion, "choices", None)
+                    else ""
+                )
+                return JSONResponse(
+                    content={"type": "text", "content": resp_text},
+                    headers={"Agent-Use": f"{agent_use}"},
+                )
+
+            except Exception as e:
+                logging.exception("Provider call failed with key index %d: %s", idx, repr(e))
+                last_exception = e
+                status = detect_status_from_exception(e)
+                headers = extract_headers_from_exception(e)
+
+                if status in (429, 402):
+                    logging.info("Detected status %s for key %d; rotating to next key", status, idx + 1)
+                    await asyncio.sleep(per_key_backoff)
+                    continue
+
+                parsed = parse_retry_seconds_from_headers(headers)
+                if parsed is not None:
+                    saw_retry_header = True
+                    retry_seconds = parsed
+                    logging.info("Detected retry header, will wait %.2fs before next round", retry_seconds)
+                    break
+
+                if status is not None and status >= 500:
+                    logging.info("Transient server error %s, try next key after short sleep", status)
+                    await asyncio.sleep(per_key_backoff)
+                    continue
+
+                logging.error("Unrecoverable provider error: %s", repr(e))
+                return JSONResponse(status_code=500, content={"error": "provider_error", "detail": str(e)})
+
+        if saw_retry_header and retry_seconds is not None:
+            wait_time = float(retry_seconds) + 0.5
+            max_wait = 300.0
+            if wait_time > max_wait:
+                wait_time = max_wait
+            logging.info("Waiting %.2fs due to rate-limit headers before retrying key pool", wait_time)
+            await asyncio.sleep(wait_time)
+            continue
+        else:
+            sleep_time = min(2 ** min(round_index, 6), 60)
+            logging.info("All keys exhausted (no retry header). Sleeping %.2fs before next round", sleep_time)
+            await asyncio.sleep(sleep_time)
+            continue
+
+    logging.error("providerRouting: max_rounds reached, failing")
+    return JSONResponse(status_code=502, content={"error": "provider_unavailable", "detail": str(last_exception)})
+
 
 from typing import Dict
+
 
 def sanitize_for_provider(messages: List[Dict]) -> List[Dict]:
 
@@ -437,6 +621,7 @@ def sanitize_for_provider(messages: List[Dict]) -> List[Dict]:
         else:
             out.append({"role": role, "content": content})
     return out
+
 
 async def add_memory(memory: str, user_id: str | None = None):
     uid = user_id or current_user_id.get()
