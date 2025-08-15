@@ -179,11 +179,7 @@ async def show_chats_menu(target, state: FSMContext, mode: str = None):
         return
 
     rows: list[list[InlineKeyboardButton]] = []
-    rows.append(
-        [
-        InlineKeyboardButton(text="➕ Новый чат", callback_data="mode:new")
-        ]
-    )
+    rows.append([InlineKeyboardButton(text="➕ Новый чат", callback_data="mode:new")])
     for chat in chats:
         label = chat.get("title") or chat["id"][:8]
 
@@ -238,10 +234,12 @@ async def cb_mode(query: types.CallbackQuery, state: FSMContext):
     if mode == "cancel":
         await state.update_data(mode="none")
         await show_chats_menu(query, state, mode=None)
-    if mode == 'new':
+    if mode == "new":
         await state.update_data(mode="none")
         await state.update_data(active_chat="0")
-        await query.message.answer(text="Введите своё первое сообщение для начала нового чата:")
+        await query.message.answer(
+            text="Введите своё первое сообщение для начала нового чата:"
+        )
     else:
         await show_chats_menu(query, state, mode=mode)
     await query.answer()
@@ -402,7 +400,10 @@ async def shortcuts_command(message: types.Message, state: FSMContext):
         return
     data = await state.get_data()
     shortcut_mode = data.get("shortcut_mode")
-    rows: list[list[InlineKeyboardButton]] = []
+    rows: list[list[InlineKeyboardButton]] = [
+                    [InlineKeyboardButton(text='➕ Создать новый шорткат', callback_data=f"shortcut-sel_")],
+
+    ]
     for shortcut in user_shortcuts:
         label = shortcut.get("command") or shortcut["id"][:8]
         id = shortcut.get("id")
@@ -413,7 +414,7 @@ async def shortcuts_command(message: types.Message, state: FSMContext):
 
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
 
-    text_map = {None: "Выберите шорткат:"}
+    text_map = {None: "<b>Шорткат - удобная система для того, что бы не вводить одинаковый текст по сотню раз</b> \n\n Когда вы введёте команду вашего шортката, то автоматически в начало вашего запроса добавиться текст из инструкции которую вы ввели, а сам ответ будет отправлен той модели, которую вы выбрали. \n\n Выберите шорткат:"}
     text = text_map[shortcut_mode]
 
     await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
@@ -758,13 +759,18 @@ async def message_router(message: types.Message, state: FSMContext):
                             chats = await fetch_chats(message.from_user.id)
                         except Exception as e:
                             await message.answer(
-                                f"Не удалось получить список чатов: {e}", show_alert=True
+                                f"Не удалось получить список чатов: {e}",
+                                show_alert=True,
                             )
                             return
 
-                        selected = next((c for c in chats if c["id"] == response_chat_id), None)
+                        selected = next(
+                            (c for c in chats if c["id"] == response_chat_id), None
+                        )
                         chat_title = (
-                            selected.get("title") if selected and selected.get("title") else response_chat_id[:8]
+                            selected.get("title")
+                            if selected and selected.get("title")
+                            else response_chat_id[:8]
                         )
 
                         chat: types.Chat = await bot.get_chat(message.chat.id)
@@ -814,23 +820,25 @@ async def message_router(message: types.Message, state: FSMContext):
                     else:
                         raw_visible, think_text = extract_and_strip_think(raw)
                         clean = markdownify(raw_visible)
-
+                        final_text = clean[:4096]
                         if not is_blank_simple(think_text):
                             try:
-                                final_text = make_final_text_by_truncating_hidden(
-                                    clean, think_text, max_len=4096
+                                byte_text = make_final_text_by_truncating_hidden(
+                                    think_text, max_len=4096
                                 )
                             except ValueError:
-                                final_text = clean[:4096]
-
+                                print("bad")
                             kb = toggle_think_buttons(
                                 InlineKeyboardMarkup(inline_keyboard=[]), show=False
                             )
                             await target.delete()
+                            await message.answer(
+                                text=byte_text,
+                                reply_markup=kb,
+                            )
                             await message.reply(
                                 final_text,
                                 parse_mode=ParseMode.MARKDOWN_V2,
-                                reply_markup=kb,
                             )
                         else:
                             final_text = clean
@@ -901,8 +909,8 @@ def _extract_hidden(full_text: str):
     return visible, zw_part
 
 
-def _make_hidden_payload(clean_text: str, think_text: str) -> bytes:
-    obj = {"clean": clean_text, "think": think_text}
+def _make_hidden_payload(think_text: str) -> bytes:
+    obj = {"think": think_text}
     return json.dumps(obj, ensure_ascii=False).encode("utf-8")
 
 
@@ -925,13 +933,14 @@ def toggle_think_buttons(kb: InlineKeyboardMarkup, show: bool) -> InlineKeyboard
 @dp.callback_query(lambda c: c.data in ("think_info", "think_hide"))
 async def on_think_toggle(callback: CallbackQuery):
     msg = callback.message
-    if not msg or not msg.text:
+    if not msg or not (msg.text or msg.caption):
         await callback.answer("Нет текста сообщения.", show_alert=True)
         return
 
-    visible, zw_part = _extract_hidden(msg.text)
-    hidden_obj = None
+    full_text = msg.text or msg.caption or ""
+    visible, zw_part = _extract_hidden(full_text)
     raw_bytes = _unpack_zw_to_bytes(zw_part) if zw_part else None
+    hidden_obj = None
     if raw_bytes:
         try:
             hidden_obj = json.loads(raw_bytes.decode("utf-8"))
@@ -940,53 +949,52 @@ async def on_think_toggle(callback: CallbackQuery):
 
     if callback.data == "think_info":
         if not hidden_obj:
-            await callback.answer(
-                "Размышления не найдены или повреждены.", show_alert=True
-            )
+            await callback.answer("Размышления не найдены или повреждены.", show_alert=True)
             return
+
         clean = hidden_obj.get("clean", visible) or ""
         think = hidden_obj.get("think", "") or ""
-        new_text = f"{clean}\n\n💡 Размышления модели:\n{think}"
+        visible_text = f"{clean}\n\n💡 Размышления модели:\n{think}"
+
         try:
-            new_text_with_hidden = make_final_text_by_truncating_hidden(
-                new_text, think, max_len=4096
-            )
+            zw_for_visible = make_final_text_by_truncating_hidden(think, max_len=4096 - len(visible_text))
+            new_text = visible_text + zw_for_visible
         except ValueError:
-            new_text_with_hidden = new_text[:4096]
-        kb_new = toggle_think_buttons(
-            msg.reply_markup or InlineKeyboardMarkup(), show=True
-        )
-        await msg.edit_text(new_text_with_hidden, reply_markup=kb_new)
+            new_text = visible_text[:4096]
+
+        kb_new = toggle_think_buttons(msg.reply_markup or InlineKeyboardMarkup(), show=True)
+        await msg.edit_text(new_text, reply_markup=kb_new, parse_mode=ParseMode.HTML)
         await callback.answer()
-    else:
+
+    else:  
         clean = (hidden_obj.get("clean", "") if hidden_obj else visible) or ""
         think_part = hidden_obj.get("think", "") if hidden_obj else ""
+        visible_text = clean
+
         try:
-            new_text_with_hidden = make_final_text_by_truncating_hidden(
-                clean, think_part, max_len=4096
-            )
+            zw_for_visible = make_final_text_by_truncating_hidden(think_part, max_len=4096 - len(visible_text))
+            new_text = visible_text + zw_for_visible
         except ValueError:
-            new_text_with_hidden = clean[:4096]
-        kb_new = toggle_think_buttons(
-            msg.reply_markup or InlineKeyboardMarkup(), show=False
-        )
-        await msg.edit_text(new_text_with_hidden, reply_markup=kb_new)
+            new_text = visible_text[:4096]
+
+        kb_new = toggle_think_buttons(msg.reply_markup or InlineKeyboardMarkup(), show=False)
+        await msg.edit_text(new_text, reply_markup=kb_new, parse_mode=ParseMode.HTML)
         await callback.answer()
 
 
 def make_final_text_by_truncating_hidden(
-    visible_text: str, think_text: str, max_len: int = 4096
+    think_text: str, max_len: int = 4096
 ) -> str:
 
     marker = _ZW_MARKER
-    space_for_zw = max_len - len(visible_text) - len(marker)
+    space_for_zw = max_len - len(marker)
     if space_for_zw <= 0:
         raise ValueError("Нет места для невидимого блока.")
 
-    whole_bytes = _make_hidden_payload(visible_text, think_text)
+    whole_bytes = _make_hidden_payload(think_text)
     whole_zw = _pack_bytes_to_zw(whole_bytes)
     if len(whole_zw) <= space_for_zw:
-        return visible_text + marker + whole_zw
+        return marker + whole_zw
 
     s = think_text or ""
     lo, hi = 0, len(s)
@@ -994,7 +1002,7 @@ def make_final_text_by_truncating_hidden(
     while lo <= hi:
         mid = (lo + hi) // 2
         cand_think = s[:mid]
-        cand_bytes = _make_hidden_payload(visible_text, cand_think)
+        cand_bytes = _make_hidden_payload(cand_think)
         try:
             cand_zw = _pack_bytes_to_zw(cand_bytes)
         except Exception:
@@ -1007,12 +1015,12 @@ def make_final_text_by_truncating_hidden(
             hi = mid - 1
 
     if best_zw is not None:
-        return visible_text + marker + best_zw
+        return marker + best_zw
 
-    empty_bytes = _make_hidden_payload(visible_text, "")
+    empty_bytes = _make_hidden_payload("")
     empty_zw = _pack_bytes_to_zw(empty_bytes)
     if len(empty_zw) <= space_for_zw:
-        return visible_text + marker + empty_zw
+        return marker + empty_zw
 
     raise ValueError("Hidden payload too large even after truncation.")
 

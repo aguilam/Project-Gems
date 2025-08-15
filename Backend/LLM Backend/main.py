@@ -46,6 +46,9 @@ mem_client = AsyncMemoryClient(
 groqClient = Groq(
     api_key=GROQ_API_KEY,
 )
+groqClient_1 = Groq(
+    api_key=os.environ.get("GROQ_API_KEY_2"),
+)
 providers = {
     "cerebras": {
         "base_url": "https://api.cerebras.ai/v1",
@@ -106,6 +109,7 @@ async def set_user_context(request: Request, call_next):
 @app.post("/llm")
 async def llm_query(request: LLMRequest):
     prodiver = request.provider
+    print(request)
     if "mistral" in prodiver:
         return await query_mistral(request)
     elif "cloudflare" in prodiver:
@@ -318,7 +322,6 @@ def add_prefix_if_first_is_system(full_messages: list, prefix: str) -> list:
 
 
 def extract_api_keys_from_provider_conf(conf: Dict[str, Any]) -> List[str]:
-    """Найти все поля, которые выглядят как api_key* и вернуть список непустых ключей в порядке обнаружения."""
     keys = []
     for k, v in conf.items():
         kn = k.lower().replace("-", "_")
@@ -329,7 +332,6 @@ def extract_api_keys_from_provider_conf(conf: Dict[str, Any]) -> List[str]:
 
 
 def detect_status_from_exception(e: Exception) -> Optional[int]:
-    """Пытаемся извлечь HTTP-код из разных атрибутов/response/текста."""
     for attr in ("http_status", "status_code", "code"):
         val = getattr(e, attr, None)
         if isinstance(val, int):
@@ -356,7 +358,6 @@ def detect_status_from_exception(e: Exception) -> Optional[int]:
 
 
 def extract_headers_from_exception(e: Exception) -> Dict[str, str]:
-    """Попытаться достать headers из exception.response или e.headers."""
     hdrs: Dict[str, str] = {}
     resp = getattr(e, "response", None)
     if resp is not None:
@@ -380,11 +381,6 @@ def extract_headers_from_exception(e: Exception) -> Dict[str, str]:
 
 
 def parse_retry_seconds_from_headers(hdrs: Dict[str, str]) -> Optional[float]:
-    """
-    Парсинг retry time из заголовков:
-      - retry-after (секунды или HTTP-date)
-      - x-ratelimit-reset-tokens*, x-ratelimit-reset-requests*, x-ratelimit-reset*
-    """
     if not hdrs:
         return None
 
@@ -454,7 +450,7 @@ async def providerRouting(request: LLMRequest):
     provider = providers[request.provider[0]]
     agent_use = 0
 
-    if request.provider[0] != "groq":
+    if request.provider[0] != "groq" and request.provider[0] != 'openrouter':
         try:
             model = request.model.split("/", 1)[1]
         except Exception:
@@ -677,7 +673,7 @@ tools = [
         "type": "function",
         "function": {
             "name": "search_memory",
-            "description": "Позволяет совершить поиск по воспоминаниям о пользователе. Используй тогда тогда когда об этом попросит пользователь или очень потребуется, например вспомнить важную информацию о пользователе, которую ты забыл.",
+            "description": "Позволяет совершить поиск по воспоминаниям о пользователе. Используй тогда тогда когда об этом попросит пользователь или очень потребуется, например вспомнить важную информацию о пользователе, которой у тебя нету в контексте сообщений",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -731,6 +727,23 @@ tools = [
                     },
                 },
                 "required": ["query"],
+            },
+        },
+    },
+        {
+        "type": "function",
+        "function": {
+            "name": "python_code_execution",
+            "description": "Позволяет тебе исполнить почти любой python code, используй когда нужно что-то проверить, посчитать очень большие числа, где важна точность, ТОЛЬКО ОТ СЧЁТА НА МИЛЛЛИАРДЫ или посмотреть выполняется ли python код ли  правильно",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "Строка с кодом для выполнения",
+                    },
+                },
+                "required": ["code"],
             },
         },
     },
@@ -834,6 +847,19 @@ async def web_search(query: str):
     return top3_text
 
 
+async def python_code_execution(code: str):
+    response = groqClient.chat.completions.create(
+        model="compound-beta",
+        messages=[
+            {
+                "role": "user",
+                "content": f"Исполни данный далее тебе Python код и напиши, что он вывел: {code}",
+            }
+        ],
+    )
+    print('код исполнен', response.choices[0].message.content)
+    return response.choices[0].message.content
+
 async def science_search(query: str):
     url = f"https://api.wolframalpha.com/v2/query?appid=TV3TVAVWAR&input={query}&output=JSON"
     timeout = httpx.Timeout(connect=60.0, read=120.0, write=60.0, pool=5.0)
@@ -858,6 +884,7 @@ available_functions = {
     "science_search": science_search,
     "add_memory": add_memory,
     "search_memory": search_memory,
+    "python_code_execution": python_code_execution,
 }
 
 
