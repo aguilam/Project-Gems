@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import axios from 'axios';
+import { ConfigService } from '@nestjs/config';
 
 export interface FileDTO {
   buffer: string;
@@ -14,6 +15,7 @@ export interface RecognizeResponseDTO {
 
 @Injectable()
 export class FileRecognizeService {
+  constructor(private configService: ConfigService) {}
   async recognize(byteFile: FileDTO): Promise<string> {
     try {
       const axiosConfig = {
@@ -26,7 +28,7 @@ export class FileRecognizeService {
       };
 
       const resp = await axios.post<RecognizeResponseDTO>(
-        'http://127.0.0.1:8000/files',
+        `${this.configService.get<string>('LLM_SERVER_URL')}/files`,
         byteFile,
         axiosConfig,
       );

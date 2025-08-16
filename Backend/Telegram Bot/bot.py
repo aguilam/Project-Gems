@@ -1,6 +1,5 @@
 from aiogram import Bot, Dispatcher, types, F, Router
 from aiogram.filters import Command
-from aiogram.methods import UnpinChatMessage, PinChatMessage
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -14,11 +13,22 @@ import os
 import base64
 from io import BytesIO
 from aiogram.fsm.context import FSMContext
-from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from dotenv import load_dotenv
 from telegramify_markdown import markdownify
+import re
+import uuid
+from aiogram.types import (
+    LabeledPrice,
+    PreCheckoutQuery,
+)
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+import zlib
+import base64
+import html
+import json
+import binascii
 
 load_dotenv()
 router = Router()
@@ -684,10 +694,6 @@ async def cb_role_select(query: types.CallbackQuery, state: FSMContext):
         await query.answer("✅ Системный промпт обновлён")
         await show_roles_menu(query, state)
 
-
-import re
-
-
 def extract_and_strip_think(text: str) -> tuple[str, str]:
     think_blocks = re.findall(
         r"<think\b[^>]*>([\s\S]*?)</think\s*>", text, flags=re.IGNORECASE
@@ -1044,13 +1050,6 @@ async def message_router(message: types.Message, state: FSMContext):
         finally:
             await state.update_data(is_locked=False)
 
-
-import zlib
-import base64
-import html
-import json
-import binascii
-
 _ZW_MARKER = "\u2063\u2063\u2063"
 _ZW_ZERO = "\u200b"
 _ZW_ONE = "\u200c"
@@ -1219,12 +1218,6 @@ def make_final_text_by_truncating_hidden(think_text: str, max_len: int = 4096) -
 PROVIDER_TOKEN = ""
 CURRENCY = "XTR"
 PRICE_MAIN_UNITS = 1
-import uuid
-from aiogram.types import (
-    LabeledPrice,
-    PreCheckoutQuery,
-)
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
 def offer_keyboard():

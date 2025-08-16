@@ -13,6 +13,7 @@ import { ShortcutsModule } from './shortcuts/shortcuts.module';
 import { SentryModule } from '@sentry/nestjs/setup';
 import { APP_FILTER } from '@nestjs/core';
 import { SentryGlobalFilter } from '@sentry/nestjs/setup';
+import { ConfigModule } from '@nestjs/config';
 
 @Module({
   imports: [
@@ -25,6 +26,10 @@ import { SentryGlobalFilter } from '@sentry/nestjs/setup';
     ShortcutsModule,
     ScheduleModule.forRoot(),
     SentryModule.forRoot(),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: './.env',
+    }),
   ],
   controllers: [AppController],
   providers: [

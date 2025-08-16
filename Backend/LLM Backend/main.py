@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, File, Request
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 import httpx
 import os
@@ -16,11 +16,17 @@ from pdfminer.converter import TextConverter
 from pdfminer.layout import LAParams
 import io
 import json
-from typing import Literal, List
 import openai
 from cerebras.cloud.sdk import Cerebras
 from mem0 import AsyncMemoryClient
 import contextvars
+import re
+import datetime
+from email.utils import parsedate_to_datetime
+import logging
+from typing import Any, Dict, List, Optional, Literal
+import asyncio
+
 
 load_dotenv()
 
@@ -288,12 +294,6 @@ async def query_cloudflare(request: LLMRequest):
         encoded = base64.b64encode(raw_bytes).decode("ascii")
         return JSONResponse(content={"type": "image", "content": encoded})
 
-
-import re
-import datetime
-
-from typing import Any, Dict, List, Optional
-
 def add_prefix_if_first_is_system(full_messages: list, prefix: str) -> list:
     if not full_messages:
         return full_messages
@@ -409,7 +409,6 @@ def parse_retry_seconds_from_headers(hdrs: Dict[str, str]) -> Optional[float]:
         if found:
             return total
         try:
-            from email.utils import parsedate_to_datetime
             dt = parsedate_to_datetime(v)
             if dt is not None:
                 now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
@@ -440,9 +439,6 @@ def parse_retry_seconds_from_headers(hdrs: Dict[str, str]) -> Optional[float]:
 
     return None
 
-import logging
-from typing import Any, Dict, List, Optional
-import asyncio
 
 async def _call_completion_with_flex(client, model: str, messages: List[Dict[str, str]]):
     res = client.chat.completions.create(model=model, messages=messages)
@@ -594,10 +590,6 @@ async def providerRouting(request: LLMRequest):
 
     logging.error("providerRouting: max_rounds reached, failing")
     return JSONResponse(status_code=502, content={"error": "provider_unavailable", "detail": str(last_exception)})
-
-
-from typing import Dict
-
 
 def sanitize_for_provider(messages: List[Dict]) -> List[Dict]:
 

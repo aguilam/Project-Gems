@@ -10,6 +10,7 @@ import { PrismaService } from 'prisma/prisma.service';
 import { ChatsService } from 'src/chats/chats.service';
 import { FileRecognizeService } from 'src/fileUpload/fileRecognize.service';
 import { OcrService } from 'src/ocr/ocr.service';
+import { ConfigService } from '@nestjs/config';
 
 export interface FileDTO {
   buffer: string;
@@ -37,6 +38,7 @@ export class MessagesService {
     private chatsService: ChatsService,
     private ocrService: OcrService,
     private FileRecognizeService: FileRecognizeService,
+    private configService: ConfigService
   ) {}
 
   async sentUserMessage(dto: MessageDTO) {
@@ -137,7 +139,7 @@ export class MessagesService {
         }
       } else {
         const response = await axios.post(
-          'http://127.0.0.1:8000/llm',
+          `${this.configService.get<string>('LLM_SERVER_URL')}/llm`,
           {
             prompt: [
               {
@@ -199,7 +201,7 @@ export class MessagesService {
         role: 'user',
       });
       const response = await axios.post(
-        'http://127.0.0.1:8000/llm',
+        `${this.configService.get<string>('LLM_SERVER_URL')}/llm`,
         {
           prompt: previousMessages,
           model: model.systemName,
