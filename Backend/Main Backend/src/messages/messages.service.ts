@@ -38,7 +38,7 @@ export class MessagesService {
     private chatsService: ChatsService,
     private ocrService: OcrService,
     private FileRecognizeService: FileRecognizeService,
-    private configService: ConfigService
+    private configService: ConfigService,
   ) {}
 
   async sentUserMessage(dto: MessageDTO) {
