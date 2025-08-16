@@ -28,8 +28,8 @@ jobs:
           file: "./Backend/Telegram Bot/Dockerfile"
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}/telegram-bot:latest
-            ghcr.io/${{ github.repository }}/telegram-bot:${{ github.sha }}
+            ghcr.io/project-gems/telegram-bot:latest
+            ghcr.io/project-gems/telegram-bot:${{ github.sha }}
 
       - name: Build and push Backend
         uses: docker/build-push-action@v5
@@ -38,5 +38,5 @@ jobs:
           file: "./Backend/LLM Backend/Dockerfile"
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}/backend:latest
-            ghcr.io/${{ github.repository }}/backend:${{ github.sha }}
+            ghcr.io/project-gems/backend:latest
+            ghcr.io/project-gems/backend:${{ github.sha }}
