@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --upgrade pip setuptools wheel==0.40.0 \
+RUN pip install --upgrade pip setuptools wheel==0.38.4 \
     && pip install -r requirements.txt
 
 COPY . .
