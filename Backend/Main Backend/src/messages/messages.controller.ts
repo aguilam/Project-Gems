@@ -26,7 +26,6 @@ export class MessageDTO {
 @Controller('messages')
 export class MessagesController {
   constructor(private messagesService: MessagesService) {}
-
   @Post()
   @UseInterceptors(
     FileInterceptor('file', {

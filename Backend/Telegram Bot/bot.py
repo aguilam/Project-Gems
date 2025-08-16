@@ -126,23 +126,25 @@ async def cmd_start(message: types.Message):
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(f"{API_URL}/user", json=data) as resp:
-                await message.answer("Привет! Я готов общаться.", parse_mode=None)
+                await message.answer("Привет! Вот основные команды: \n\n /profile - узнать информацию о профиле и количестве оставшихся вопросов \n /models - выбрать другую ИИ-модель \n /role - поменять роль(системный промпт) для ИИ \n /chats - поменять текущий чат или создать новый \n /shortcuts - создать новый шорткат или поменять текущий \n /support - сообщить о проблеме, ошибке или предложении \n /pro - не хватает текущих возможностей и моделей? Попробуйте pro подписку \n\n <b>Что-бы начать общение просто напишите свой запрос!</b>", parse_mode=ParseMode.HTML)
                 resp.raise_for_status()
                 user_info = await resp.json()
                 chat_id = message.chat.id
-                user_model = user_info["defaultModelId"]
+                user_model = user_info["defaultModel"]
+                model_name = user_model['name']
                 message_to_pin = await message.bot.send_message(
-                    chat_id=chat_id, text=f"📝{user_model}"
+                    chat_id=chat_id, text=f"📝{model_name}"
                 )
                 await bot.pin_chat_message(
                     chat_id=chat_id,
                     message_id=message_to_pin.message_id,
                     disable_notification=True,
                 )
+                return
+
     except aiohttp.ClientError as e:
         await message.answer(f"Ошибка подключения к серверу: {e}")
-
-
+        return
 async def fetch_chats(telegram_id: int) -> dict:
     async with aiohttp.ClientSession() as session:
         async with session.get(f"{API_URL}/chats?telegramId={telegram_id}") as resp:
@@ -384,9 +386,30 @@ async def on_models_command(message: types.Message):
     await message.answer("Выберите модель:", reply_markup=kb)
 
 
-async def fetch_shortcuts(telegram_id: int) -> dict:
+async def fetch_user_shortcuts(telegram_id: int) -> dict:
     async with aiohttp.ClientSession() as session:
         async with session.get(f"{API_URL}/shortcuts?telegramId={telegram_id}") as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+
+async def add_shortcuts(data: int) -> dict:
+    async with aiohttp.ClientSession() as session:
+        async with session.post(f"{API_URL}/shortcuts", json=data) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+
+async def delete_shortcuts(id: int) -> dict:
+    async with aiohttp.ClientSession() as session:
+        async with session.delete(f"{API_URL}/shortcuts/{id}") as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+
+async def patch_shortcuts(id: int) -> dict:
+    async with aiohttp.ClientSession() as session:
+        async with session.patch(f"{API_URL}/shortcuts/{id}") as resp:
             resp.raise_for_status()
             return await resp.json()
 
@@ -394,15 +417,18 @@ async def fetch_shortcuts(telegram_id: int) -> dict:
 @dp.message(Command(commands=["shortcuts"]))
 async def shortcuts_command(message: types.Message, state: FSMContext):
     try:
-        user_shortcuts = await fetch_shortcuts(message.from_user.id)
+        user_shortcuts = await fetch_user_shortcuts(message.from_user.id)
     except Exception as e:
         await message.answer(f"Не удалось получить список шорткатов: {e}")
         return
     data = await state.get_data()
     shortcut_mode = data.get("shortcut_mode")
     rows: list[list[InlineKeyboardButton]] = [
-                    [InlineKeyboardButton(text='➕ Создать новый шорткат', callback_data=f"shortcut-sel_")],
-
+        [
+            InlineKeyboardButton(
+                text="➕ Создать новый шорткат", callback_data=f"shortcut-sel_"
+            )
+        ],
     ]
     for shortcut in user_shortcuts:
         label = shortcut.get("command") or shortcut["id"][:8]
@@ -414,7 +440,9 @@ async def shortcuts_command(message: types.Message, state: FSMContext):
 
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
 
-    text_map = {None: "<b>Шорткат - удобная система для того, что бы не вводить одинаковый текст по сотню раз</b> \n\n Когда вы введёте команду вашего шортката, то автоматически в начало вашего запроса добавиться текст из инструкции которую вы ввели, а сам ответ будет отправлен той модели, которую вы выбрали. \n\n Выберите шорткат:"}
+    text_map = {
+        None: "<b>Шорткат - удобная система для того, что бы не вводить одинаковый текст по сотню раз</b> \n\n Когда вы введёте команду вашего шортката, то автоматически в начало вашего запроса добавиться текст из инструкции которую вы ввели, а сам ответ будет отправлен той модели, которую вы выбрали. \n\n Выберите шорткат:"
+    }
     text = text_map[shortcut_mode]
 
     await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
@@ -692,35 +720,19 @@ forbidden_commands = {
     "/role",
     "/start",
     "/pro",
-    "/suppport",
+    "/support",
     "/shortcuts",
 }
 
 
-@dp.message(lambda m: m.text is not None and m.text not in forbidden_commands)
+@dp.message(lambda m: m.text == None or not (m.text and any(m.text.strip().startswith(cmd) for cmd in forbidden_commands)))
 async def message_router(message: types.Message, state: FSMContext):
-
     data = await state.get_data()
     mode = data.get("mode")
     edit_target = data.get("edit_target")
+    payload = None
+    form_data = None
 
-    if mode == "edit" and edit_target:
-        new_title = message.text.strip()
-        await edit_chat(edit_target, new_title)
-        await message.answer(f"✅ Чат переименован в: {new_title}")
-        await state.update_data(edit_target=None)
-        await show_chats_menu(message, state, mode="edit")
-        return
-
-    if data.get("mode") == "role_custom":
-
-        prompt = message.text.strip()
-        await patch_user_info(
-            {"telegramId": message.from_user.id, "systemPrompt": prompt}
-        )
-        await message.answer("✅ Ваш системный промпт сохранён")
-        await show_roles_menu(message, state)
-        return
     if data.get("is_locked") == True:
         await message.answer("Дождитесь пожалуйста ответа модели")
         return
@@ -731,126 +743,301 @@ async def message_router(message: types.Message, state: FSMContext):
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     chat_id = data.get("active_chat")
 
-    payload = {
-        "telegramId": message.from_user.id,
-        "prompt": message.text,
-    }
-    if chat_id:
-        payload["chatId"] = chat_id
+    if message.text is not None and message.text not in forbidden_commands:
+        if mode == "edit" and edit_target:
+            new_title = message.text.strip()
+            await edit_chat(edit_target, new_title)
+            await message.answer(f"✅ Чат переименован в: {new_title}")
+            await state.update_data(edit_target=None)
+            await show_chats_menu(message, state, mode="edit")
+            return
 
+        if data.get("mode") == "role_custom":
+
+            prompt = message.text.strip()
+            await patch_user_info(
+                {"telegramId": message.from_user.id, "systemPrompt": prompt}
+            )
+            await message.answer("✅ Ваш системный промпт сохранён")
+            await show_roles_menu(message, state)
+            return
+        payload = {
+            "telegramId": message.from_user.id,
+            "prompt": message.text,
+        }
+        if chat_id:
+            payload["chatId"] = chat_id
+    if message.photo:
+        photo: types.PhotoSize = message.photo[-1]
+
+        bio = BytesIO()
+        await bot.download(photo.file_id, destination=bio)
+        bio.seek(0)
+        file_bytes = bio.read()
+
+        user_text = message.caption or "Игнорируй этот текст, читай только что выше"
+
+        b64 = base64.b64encode(file_bytes).decode("utf-8")
+
+        payload = {
+            "telegramId": message.from_user.id,
+            "prompt": user_text,
+            "image": b64,
+        }
+        if chat_id:
+            payload["chatId"] = chat_id
+    if (message.document and not (message.document.mime_type or "").startswith("image/")) or message.audio or message.voice:
+        is_forwarded = bool(
+            message.forward_from or message.forward_from_chat or message.forward_sender_name
+        )
+        doc = message.document or message.audio or message.voice
+        form_data = aiohttp.FormData()
+        caption = message.caption or "Игнорируй этот текст,  читай только что выше"
+        form_data.add_field("prompt", caption, content_type="text/plain")
+        form_data.add_field("telegramId", str(message.from_user.id), content_type="text/plain")
+        form_data.add_field("chatId", str(chat_id), content_type='text/plain')
+        form_data.add_field("isForwarded", str(is_forwarded), content_type="text/plain")
+        if not doc:
+            return
+        bio = BytesIO()
+        await bot.download(doc.file_id, destination=bio)
+        bio.seek(0)
+        filename = getattr(doc, "file_name", f"{doc.file_id}.ogg")
+        content_type = getattr(doc, "mime_type", None) or (
+            "audio/ogg" if message.voice else "application/octet-stream"
+        )
+        form_data.add_field(
+            "file",
+            value=bio,
+            filename=filename,
+            content_type=content_type,
+        )
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.post(f"{API_URL}/messages", json=payload) as resp:
-                text = await resp.text()
-                if resp.status >= 400:
-                    try:
-                        err = await resp.json()
-                        await message.answer(err.get("message", text))
-                    except:
-                        await message.answer(text)
-                    return
-
-                try:
-                    result = await resp.json()
-                    response_chat_id = result.get("chatId", "0")
-                    actual_chat_id = data.get("active_chat")
-                    if response_chat_id != actual_chat_id:
+            if isinstance(form_data, aiohttp.FormData):
+                async with session.post(f"{API_URL}/messages", data=form_data) as resp:
+                    text = await resp.text()
+                    if resp.status >= 400:
                         try:
-                            chats = await fetch_chats(message.from_user.id)
-                        except Exception as e:
-                            await message.answer(
-                                f"Не удалось получить список чатов: {e}",
-                                show_alert=True,
-                            )
-                            return
+                            err = await resp.json()
+                            await message.answer(err.get("message", text))
+                        except:
+                            await message.answer(text)
+                        return
 
-                        selected = next(
-                            (c for c in chats if c["id"] == response_chat_id), None
-                        )
-                        chat_title = (
-                            selected.get("title")
-                            if selected and selected.get("title")
-                            else response_chat_id[:8]
-                        )
-
-                        chat: types.Chat = await bot.get_chat(message.chat.id)
-                        pinned: types.Message | None = chat.pinned_message
-
-                        # if not pinned:
-                        #    return await query.message.reply("В чате нет закреплённого сообщения.")
-
-                        original = pinned.text or pinned.caption or ""
-                        if "|" not in original:
-                            new_text = f"{original} | 💭{chat_title}"
-
+                    try:
+                        result = await resp.json()
+                        response_chat_id = result.get("chatId", "0")
+                        actual_chat_id = data.get("active_chat")
+                        if response_chat_id != actual_chat_id:
                             try:
-                                await bot.edit_message_text(
-                                    text=new_text,
-                                    chat_id=message.chat.id,
-                                    message_id=pinned.message_id,
+                                chats = await fetch_chats(message.from_user.id)
+                            except Exception as e:
+                                await message.answer(
+                                    f"Не удалось получить список чатов: {e}",
+                                    show_alert=True,
                                 )
                                 return
-                            except Exception as e:
-                                return "bad"
+
+                            selected = next(
+                                (c for c in chats if c["id"] == response_chat_id), None
+                            )
+                            chat_title = (
+                                selected.get("title")
+                                if selected and selected.get("title")
+                                else response_chat_id[:8]
+                            )
+
+                            chat: types.Chat = await bot.get_chat(message.chat.id)
+                            pinned: types.Message | None = chat.pinned_message
+
+                            # if not pinned:
+                            #    return await query.message.reply("В чате нет закреплённого сообщения.")
+
+                            original = pinned.text or pinned.caption or ""
+                            if "|" not in original:
+                                new_text = f"{original} | 💭{chat_title}"
+
+                                try:
+                                    await bot.edit_message_text(
+                                        text=new_text,
+                                        chat_id=message.chat.id,
+                                        message_id=pinned.message_id,
+                                    )
+                                    return
+                                except Exception as e:
+                                    return "bad"
+                            else:
+                                base = original.split("|", 1)[0]
+                                new_text = f"{base}| 💭{chat_title}"
+
+                                try:
+                                    await bot.edit_message_text(
+                                        text=new_text,
+                                        chat_id=message.chat.id,
+                                        message_id=pinned.message_id,
+                                    )
+                                except Exception as e:
+                                    return print(e)
+                        await state.update_data(active_chat=response_chat_id)
+                        raw = result.get("content", "")
+
+                        if isinstance(raw, (tuple, list)):
+                            raw = raw[0] if raw else ""
+                        if not isinstance(raw, str):
+                            raw = str(raw) or ""
+
+                        if result.get("type") == "image":
+                            photo = BufferedInputFile(
+                                base64.b64decode(raw), filename="gen.png"
+                            )
+                            await message.answer_photo(photo)
                         else:
-                            base = original.split("|", 1)[0]
-                            new_text = f"{base}| 💭{chat_title}"
-
-                            try:
-                                await bot.edit_message_text(
-                                    text=new_text,
-                                    chat_id=message.chat.id,
-                                    message_id=pinned.message_id,
+                            raw_visible, think_text = extract_and_strip_think(raw)
+                            clean = markdownify(raw_visible)
+                            final_text = clean[:4096]
+                            if not is_blank_simple(think_text):
+                                try:
+                                    byte_text = make_final_text_by_truncating_hidden(
+                                        think_text, max_len=4096
+                                    )
+                                except ValueError:
+                                    print("bad")
+                                kb = toggle_think_buttons(
+                                    InlineKeyboardMarkup(inline_keyboard=[]), show=False
                                 )
-                            except Exception as e:
-                                return print(e)
-                    await state.update_data(active_chat=response_chat_id)
-                    raw = result.get("content", "")
-
-                    if isinstance(raw, (tuple, list)):
-                        raw = raw[0] if raw else ""
-                    if not isinstance(raw, str):
-                        raw = str(raw) or ""
-
-                    if result.get("type") == "image":
-                        photo = BufferedInputFile(
-                            base64.b64decode(raw), filename="gen.png"
+                                await target.delete()
+                                await message.answer(
+                                    text=byte_text,
+                                    reply_markup=kb,
+                                )
+                                await message.reply(
+                                    final_text,
+                                    parse_mode=ParseMode.MARKDOWN_V2,
+                                )
+                            else:
+                                final_text = clean
+                                await target.delete()
+                                await message.reply(
+                                    final_text, parse_mode=ParseMode.MARKDOWN_V2
+                                )
+                    except Exception as e:
+                        await target.delete()
+                        await message.answer(
+                            f"Ошибка обработки ответа: {e}. Попробуйте позже."
                         )
-                        await message.answer_photo(photo)
-                    else:
-                        raw_visible, think_text = extract_and_strip_think(raw)
-                        clean = markdownify(raw_visible)
-                        final_text = clean[:4096]
-                        if not is_blank_simple(think_text):
+            else:
+                async with session.post(f"{API_URL}/messages", json=payload) as resp:
+                    text = await resp.text()
+                    if resp.status >= 400:
+                        try:
+                            err = await resp.json()
+                            await message.answer(err.get("message", text))
+                        except:
+                            await message.answer(text)
+                        return
+
+                    try:
+                        result = await resp.json()
+                        response_chat_id = result.get("chatId", "0")
+                        actual_chat_id = data.get("active_chat")
+                        if response_chat_id != actual_chat_id:
                             try:
-                                byte_text = make_final_text_by_truncating_hidden(
-                                    think_text, max_len=4096
+                                chats = await fetch_chats(message.from_user.id)
+                            except Exception as e:
+                                await message.answer(
+                                    f"Не удалось получить список чатов: {e}",
+                                    show_alert=True,
                                 )
-                            except ValueError:
-                                print("bad")
-                            kb = toggle_think_buttons(
-                                InlineKeyboardMarkup(inline_keyboard=[]), show=False
+                                return
+
+                            selected = next(
+                                (c for c in chats if c["id"] == response_chat_id), None
                             )
-                            await target.delete()
-                            await message.answer(
-                                text=byte_text,
-                                reply_markup=kb,
+                            chat_title = (
+                                selected.get("title")
+                                if selected and selected.get("title")
+                                else response_chat_id[:8]
                             )
-                            await message.reply(
-                                final_text,
-                                parse_mode=ParseMode.MARKDOWN_V2,
+
+                            chat: types.Chat = await bot.get_chat(message.chat.id)
+                            pinned: types.Message | None = chat.pinned_message
+
+                            # if not pinned:
+                            #    return await query.message.reply("В чате нет закреплённого сообщения.")
+
+                            original = pinned.text or pinned.caption or ""
+                            if "|" not in original:
+                                new_text = f"{original} | 💭{chat_title}"
+
+                                try:
+                                    await bot.edit_message_text(
+                                        text=new_text,
+                                        chat_id=message.chat.id,
+                                        message_id=pinned.message_id,
+                                    )
+                                    return
+                                except Exception as e:
+                                    return "bad"
+                            else:
+                                base = original.split("|", 1)[0]
+                                new_text = f"{base}| 💭{chat_title}"
+
+                                try:
+                                    await bot.edit_message_text(
+                                        text=new_text,
+                                        chat_id=message.chat.id,
+                                        message_id=pinned.message_id,
+                                    )
+                                except Exception as e:
+                                    return print(e)
+                        await state.update_data(active_chat=response_chat_id)
+                        raw = result.get("content", "")
+
+                        if isinstance(raw, (tuple, list)):
+                            raw = raw[0] if raw else ""
+                        if not isinstance(raw, str):
+                            raw = str(raw) or ""
+
+                        if result.get("type") == "image":
+                            photo = BufferedInputFile(
+                                base64.b64decode(raw), filename="gen.png"
                             )
+                            await message.answer_photo(photo)
                         else:
-                            final_text = clean
-                            await target.delete()
-                            await message.reply(
-                                final_text, parse_mode=ParseMode.MARKDOWN_V2
-                            )
-                except Exception as e:
-                    await target.delete()
-                    await message.answer(
-                        f"Ошибка обработки ответа: {e}. Попробуйте позже."
-                    )
+                            raw_visible, think_text = extract_and_strip_think(raw)
+                            clean = markdownify(raw_visible)
+                            final_text = clean[:4096]
+                            if not is_blank_simple(think_text):
+                                try:
+                                    byte_text = make_final_text_by_truncating_hidden(
+                                        think_text, max_len=4096
+                                    )
+                                except ValueError:
+                                    print("bad")
+                                kb = toggle_think_buttons(
+                                    InlineKeyboardMarkup(inline_keyboard=[]), show=False
+                                )
+                                await target.delete()
+                                await message.answer(
+                                    text=byte_text,
+                                    reply_markup=kb,
+                                )
+                                await message.reply(
+                                    final_text,
+                                    parse_mode=ParseMode.MARKDOWN_V2,
+                                )
+                            else:
+                                final_text = clean
+                                await target.delete()
+                                await message.reply(
+                                    final_text, parse_mode=ParseMode.MARKDOWN_V2
+                                )
+                    except Exception as e:
+                        await target.delete()
+                        await message.answer(
+                            f"Ошибка обработки ответа: {e}. Попробуйте позже."
+                        )
         except ClientError as e:
             await target.delete()
             await message.answer(f"Сетевая ошибка: {e}")
@@ -896,10 +1083,6 @@ def _unpack_zw_to_bytes(s: str) -> bytes | None:
         return data
     except Exception:
         return None
-
-
-def _embed_hidden(visible_text: str, hidden_bytes: bytes) -> str:
-    return visible_text + _ZW_MARKER + _pack_bytes_to_zw(hidden_bytes)
 
 
 def _extract_hidden(full_text: str):
@@ -949,7 +1132,9 @@ async def on_think_toggle(callback: CallbackQuery):
 
     if callback.data == "think_info":
         if not hidden_obj:
-            await callback.answer("Размышления не найдены или повреждены.", show_alert=True)
+            await callback.answer(
+                "Размышления не найдены или повреждены.", show_alert=True
+            )
             return
 
         clean = hidden_obj.get("clean", visible) or ""
@@ -957,34 +1142,40 @@ async def on_think_toggle(callback: CallbackQuery):
         visible_text = f"{clean}\n\n💡 Размышления модели:\n{think}"
 
         try:
-            zw_for_visible = make_final_text_by_truncating_hidden(think, max_len=4096 - len(visible_text))
+            zw_for_visible = make_final_text_by_truncating_hidden(
+                think, max_len=4096 - len(visible_text)
+            )
             new_text = visible_text + zw_for_visible
         except ValueError:
             new_text = visible_text[:4096]
 
-        kb_new = toggle_think_buttons(msg.reply_markup or InlineKeyboardMarkup(), show=True)
+        kb_new = toggle_think_buttons(
+            msg.reply_markup or InlineKeyboardMarkup(), show=True
+        )
         await msg.edit_text(new_text, reply_markup=kb_new, parse_mode=ParseMode.HTML)
         await callback.answer()
 
-    else:  
+    else:
         clean = (hidden_obj.get("clean", "") if hidden_obj else visible) or ""
         think_part = hidden_obj.get("think", "") if hidden_obj else ""
         visible_text = clean
 
         try:
-            zw_for_visible = make_final_text_by_truncating_hidden(think_part, max_len=4096 - len(visible_text))
+            zw_for_visible = make_final_text_by_truncating_hidden(
+                think_part, max_len=4096 - len(visible_text)
+            )
             new_text = visible_text + zw_for_visible
         except ValueError:
             new_text = visible_text[:4096]
 
-        kb_new = toggle_think_buttons(msg.reply_markup or InlineKeyboardMarkup(), show=False)
+        kb_new = toggle_think_buttons(
+            msg.reply_markup or InlineKeyboardMarkup(), show=False
+        )
         await msg.edit_text(new_text, reply_markup=kb_new, parse_mode=ParseMode.HTML)
         await callback.answer()
 
 
-def make_final_text_by_truncating_hidden(
-    think_text: str, max_len: int = 4096
-) -> str:
+def make_final_text_by_truncating_hidden(think_text: str, max_len: int = 4096) -> str:
 
     marker = _ZW_MARKER
     space_for_zw = max_len - len(marker)
@@ -1023,92 +1214,6 @@ def make_final_text_by_truncating_hidden(
         return marker + empty_zw
 
     raise ValueError("Hidden payload too large even after truncation.")
-
-
-@dp.message(F.photo)
-async def on_photo(message: types.Message):
-    photo: types.PhotoSize = message.photo[-1]
-
-    bio = BytesIO()
-    await bot.download(photo.file_id, destination=bio)
-    bio.seek(0)
-    file_bytes = bio.read()
-
-    user_text = message.caption or "Игнорируй этот текст, читай только что выше"
-
-    b64 = base64.b64encode(file_bytes).decode("utf-8")
-
-    payload = {
-        "telegramId": message.from_user.id,
-        "prompt": user_text,
-        "image": b64,
-    }
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(f"{API_URL}/messages", json=payload) as resp:
-                text = await resp.text()
-
-                if resp.status >= 400:
-                    try:
-                        err = await resp.json()
-                        err_msg = err.get("message", text)
-                    except Exception:
-                        err_msg = text
-                    await message.reply(f"Ошибка: {err_msg}")
-                    return
-
-                data = await resp.json()
-                await message.reply(data.get("content", ""), parse_mode="MarkdownV2")
-    except aiohttp.ClientError as e:
-        await message.reply(f"Сетевая ошибка: {e}")
-
-
-@dp.message((F.document & ~F.document.mime_type.contains("image/")) | F.audio | F.voice)
-async def handler_doc(message: types.message):
-    is_forwarded = bool(
-        message.forward_from or message.forward_from_chat or message.forward_sender_name
-    )
-    doc = message.document or message.audio or message.voice
-    data = aiohttp.FormData()
-    caption = message.caption or "Игнорируй этот текст,  читай только что выше"
-    data.add_field("prompt", caption, content_type="text/plain")
-    data.add_field("telegramId", str(message.from_user.id), content_type="text/plain")
-    data.add_field("isForwarded", str(is_forwarded), content_type="text/plain")
-    if not doc:
-        return
-    bio = BytesIO()
-    await bot.download(doc.file_id, destination=bio)
-    bio.seek(0)
-    filename = getattr(doc, "file_name", f"{doc.file_id}.ogg")
-    content_type = getattr(doc, "mime_type", None) or (
-        "audio/ogg" if message.voice else "application/octet-stream"
-    )
-    data.add_field(
-        "file",
-        value=bio,
-        filename=filename,
-        content_type=content_type,
-    )
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(f"{API_URL}/messages", data=data) as resp:
-                text = await resp.text()
-
-                if resp.status >= 400:
-                    try:
-                        err = await resp.json()
-                        err_msg = err.get("message", text)
-                    except Exception:
-                        err_msg = text
-                    await message.reply(f"Ошибка: {err_msg}")
-                    return
-
-                data = await resp.json()
-                await message.reply(data.get("content", ""))
-    except aiohttp.ClientError as e:
-        await message.reply(f"Сетевая ошибка: {e}")
 
 
 PROVIDER_TOKEN = ""

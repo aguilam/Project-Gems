@@ -109,7 +109,6 @@ async def set_user_context(request: Request, call_next):
 @app.post("/llm")
 async def llm_query(request: LLMRequest):
     prodiver = request.provider
-    print(request)
     if "mistral" in prodiver:
         return await query_mistral(request)
     elif "cloudflare" in prodiver:
@@ -227,7 +226,7 @@ async def files_recognize(req: FileRequest):
                     os.unlink(tmp_path)
                 except OSError:
                     pass
-    return {"text": text, "type": mediaType}
+    return {"content": text, "type": mediaType}
 
 
 async def query_mistral(request: LLMRequest):
@@ -237,8 +236,14 @@ async def query_mistral(request: LLMRequest):
         "model": request.model,
         "messages": [m.dict() for m in request.prompt],
     }
+    timeout = httpx.Timeout(
+    connect=10.0,  
+    read=120.0,   
+    write=60.0,
+    pool=10.0
+)
     async with httpx.AsyncClient() as client:
-        resp = await client.post(url, json=payload, headers=headers)
+        resp = await client.post(url, json=payload, headers=headers, timeout=timeout)
         if resp.status_code != 200:
             raise HTTPException(status_code=resp.status_code, detail=resp.text)
         data = resp.json()
@@ -857,7 +862,6 @@ async def python_code_execution(code: str):
             }
         ],
     )
-    print('код исполнен', response.choices[0].message.content)
     return response.choices[0].message.content
 
 async def science_search(query: str):

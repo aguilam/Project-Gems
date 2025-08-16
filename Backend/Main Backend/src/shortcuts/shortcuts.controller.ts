@@ -51,9 +51,9 @@ export class ShortcutsController {
     @Body()
     dto: {
       id: string;
-      command: string;
-      modelId: string;
-      instruction: string;
+      command?: string;
+      modelId?: string;
+      instruction?: string;
     },
   ) {
     await this.shortcutService.patchShortcutById(dto);

@@ -1,5 +1,16 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
+
+type PatchShortcutDto = {
+  id: string;
+  command?: string | null;
+  modelId?: string | null;
+  instruction?: string | null;
+};
 @Injectable()
 export class ShortcutsService {
   constructor(private prismaService: PrismaService) {}
@@ -85,22 +96,55 @@ export class ShortcutsService {
     }
     return shortcut;
   }
+  async patchShortcutById(dto: PatchShortcutDto) {
+    const data: Record<string, any> = {};
 
-  async patchShortcutById(dto: {
-    id: string;
-    command: string;
-    modelId: string;
-    instruction: string;
-  }) {
-    await this.prismaService.shortcut.update({
-      where: {
-        id: dto.id,
-      },
-      data: {
-        command: dto.command,
-        modelId: dto.modelId,
-        instruction: dto.instruction,
-      },
+    if (dto.command !== undefined) {
+      if (dto.command === null) {
+        data.command = null;
+      } else {
+        if (dto.command.length < 2) throw new Error('Команда слишком короткая');
+        const exists = await this.prismaService.shortcut.findFirst({
+          where: { command: dto.command, NOT: { id: dto.id } },
+        });
+        if (exists) throw new Error('Команда уже используется');
+        data.command = dto.command;
+      }
+    }
+
+    if (dto.modelId !== undefined) {
+      if (dto.modelId === null) {
+        data.modelId = null;
+      } else {
+        const model = await this.prismaService.aIModel.findUnique({
+          where: { id: dto.modelId },
+        });
+        if (!model) throw new Error('Указанная модель не найдена');
+        data.modelId = dto.modelId;
+      }
+    }
+
+    if (dto.instruction !== undefined) {
+      if (dto.instruction === null) {
+        data.instruction = null;
+      } else {
+        const instr = dto.instruction.trim();
+        if (instr.length > 2000) throw new Error('Инструкция слишком длинная');
+        data.instruction = instr;
+      }
+    }
+
+    if (Object.keys(data).length === 0) {
+      return await this.prismaService.shortcut.findUnique({
+        where: { id: dto.id },
+      });
+    }
+
+    const updated = await this.prismaService.shortcut.update({
+      where: { id: dto.id },
+      data,
     });
+
+    return updated;
   }
 }

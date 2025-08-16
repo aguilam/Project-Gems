@@ -8,7 +8,7 @@ import {
 import axios from 'axios';
 import { PrismaService } from 'prisma/prisma.service';
 import { ChatsService } from 'src/chats/chats.service';
-import { fileRecognizeService } from 'src/fileUpload/fileRecognize.service';
+import { FileRecognizeService } from 'src/fileUpload/fileRecognize.service';
 import { OcrService } from 'src/ocr/ocr.service';
 
 export interface FileDTO {
@@ -36,7 +36,7 @@ export class MessagesService {
     private prisma: PrismaService,
     private chatsService: ChatsService,
     private ocrService: OcrService,
-    private fileRecognizeService: fileRecognizeService,
+    private FileRecognizeService: FileRecognizeService,
   ) {}
 
   async sentUserMessage(dto: MessageDTO) {
@@ -108,7 +108,7 @@ export class MessagesService {
       }
 
       if (dto.file) {
-        fileRecognizeResult = await this.fileRecognizeService.recognize(
+        fileRecognizeResult = await this.FileRecognizeService.recognize(
           dto.file,
         );
 
@@ -141,8 +141,27 @@ export class MessagesService {
           {
             prompt: [
               {
-                role: 'user',
-                content: `Придумай название чата в пяти словах на основе этого сообщения, используй только слова, без смайликов, и символов типа "'/:}[] - "${dto.prompt}"`,
+                role: 'system',
+                content: `You are a helpful assistant whose job is to generate concise, descriptive chat titles based on the user’s first message.
+            
+            Instructions:
+            - Detect the language of the user’s message automatically.
+            - Write the chat title in the same language.
+            - Keep the title to a maximum of 5 words (ideally 3–4 words).
+            - Capture the essence of the message; be clear and descriptive.
+            - Provide only the title — nothing else, no explanation, no extra formatting.
+            
+            Examples:
+            User says (English): "Can you help me plan a week-long trip to Japan with budget-friendly options?"
+             Title: "Budget Japan Trip"
+            
+            User says (Russian): "Помоги составить план поездки на неделю в Японию с бюджетными опциями"
+             Title: "Бюджетная поездка в Японию"
+            
+            User says (Spanish): "Necesito un resumen rápido de este artículo sobre cambio climático"
+             Title: "Resumen Cambio Climático"
+            
+            Now, user says: "${fullPrompt}"`,
               },
             ],
             model: 'llama3.3-70b',
@@ -161,12 +180,12 @@ export class MessagesService {
           response.data.content as string,
         );
       }
-      if (!(fileRecognizeResult.trim() == '') && dto.isForwarded == true) {
-        return {
-          content: fileRecognizeResult,
-          type: 'text',
-        };
-      }
+      //if (!(fileRecognizeResult.trim() == '') && dto.isForwarded == true) {
+      //  return {
+      //    content: fileRecognizeResult,
+      //    type: 'text',
+      //  };
+      //}
       const userMessage = await this.prisma.message.create({
         data: {
           chatId: chat.id,
