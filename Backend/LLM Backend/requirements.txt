@@ -69,7 +69,7 @@ six==1.17.0
 wcwidth==0.2.13
 
 docx2txt==0.9
-extract-msg==0.28.7
+extract-msg==0.29.0
 compressed-rtf==1.0.7
 SpeechRecognition==3.8.1
 
