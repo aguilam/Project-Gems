@@ -1,4 +1,3 @@
-# Базовый образ с Python
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -6,10 +5,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libxml2-dev \
     libxslt1-dev \
+    libssl-dev \
     libjpeg-dev \
     zlib1g-dev \
     libpng-dev \
+    libblas-dev \
+    liblapack-dev \
+    liblcms2-dev \
     libtiff5-dev \
+    gfortran \
     libfreetype6-dev \
     antiword \
     unrtf \
