@@ -6,7 +6,8 @@ from dotenv import load_dotenv
 from groq import Groq
 from fastapi.responses import JSONResponse
 import base64
-import textract
+# NOTE: textract temporarily removed as requested
+# import textract
 import tempfile
 from io import BytesIO
 from openpyxl import load_workbook
@@ -175,10 +176,10 @@ async def files_recognize(req: FileRequest):
             if len(total_text) >= 3000:
                 break
 
-            device.close()
-            retstr.close()
-            fp.close()
-            return total_text
+        device.close()
+        retstr.close()
+        fp.close()
+        return total_text
     elif ext in ("xls", "xlsx"):
         wb = load_workbook(filename=BytesIO(data), read_only=True)
         parts = []
@@ -220,8 +221,11 @@ async def files_recognize(req: FileRequest):
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp.write(data)
                 tmp_path = tmp.name
-            raw = textract.process(tmp_path)
-            text = raw.decode("utf-8", errors="ignore")
+
+            # NOTE: textract usage removed/commented per request.
+            # Если позже захотите вернуть — раскомментируйте строку ниже и добавьте textract в requirements.
+            # raw = textract.process(tmp_path)
+            text = 'Бета фича'  # raw.decode("utf-8", errors="ignore")
 
         except Exception as e:
             return {"error": "Processing failed", "detail": str(e)}
@@ -243,11 +247,11 @@ async def query_mistral(request: LLMRequest):
         "messages": [m.dict() for m in request.prompt],
     }
     timeout = httpx.Timeout(
-    connect=10.0,  
-    read=120.0,   
-    write=60.0,
-    pool=10.0
-)
+        connect=10.0,  
+        read=120.0,   
+        write=60.0,
+        pool=10.0
+    )
     async with httpx.AsyncClient() as client:
         resp = await client.post(url, json=payload, headers=headers, timeout=timeout)
         if resp.status_code != 200:

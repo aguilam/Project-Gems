@@ -1,3 +1,5 @@
+# textract==1.0.0
+
 fastapi==0.116.1
 uvicorn==0.35.0
 starlette==0.47.2
@@ -49,7 +51,6 @@ olefile==0.47
 et_xmlfile==2.0.0
 
 pdfminer.six==20191110
-textract==1.6.4
 pillow==11.3.0
 python-dateutil==2.9.0.post0
 pytz==2025.2
