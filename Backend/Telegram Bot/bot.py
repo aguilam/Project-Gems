@@ -29,6 +29,7 @@ import base64
 import html
 import json
 import binascii
+from datetime import datetime, time
 
 from aiohttp import web
 import logging
@@ -735,10 +736,6 @@ async def help_form(message: types.Message):
         "https://forms\.gle/Cwb4PJMnSJ8ZeEgo7\n"
     )
     await message.answer(text=text, parse_mode=ParseMode.MARKDOWN_V2)
-
-
-from datetime import datetime
-
 
 @dp.message(Command(commands=["profile"]))
 async def help_form(message: types.Message):
