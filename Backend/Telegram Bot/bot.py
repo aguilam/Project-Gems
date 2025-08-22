@@ -1338,22 +1338,47 @@ async def success_payment_handler(message: types.message):
             parse_mode=ParseMode.MARKDOWN_V2,
         )
 
+import socket
+import time
+async def _wait_port_up(port: int, timeout: float = 10.0) -> bool:
+    def _check(port, timeout):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                s = socket.create_connection(("127.0.0.1", port), timeout=1)
+                s.close()
+                return True
+            except Exception:
+                time.sleep(0.2)
+        return False
+
+    return await asyncio.to_thread(_check, port, timeout)
+
 
 async def main():
     port = int(os.environ.get("PORT", 8000))
 
+    print(f"[boot] starting health server on 0.0.0.0:{port} ...", flush=True)
     health_runner = await _start_health_server(port)
-    print(f"Health server running on 0.0.0.0:{port}")
+    print("[boot] health server started, waiting for port to accept connections...", flush=True)
 
+    ok = await _wait_port_up(port, timeout=10.0)
+    if not ok:
+        print(f"[boot][WARN] port {port} is not accepting connections after wait; continuing anyway.", flush=True)
+    else:
+        print(f"[boot] port {port} is reachable (self-check OK).", flush=True)
 
     polling_task = asyncio.create_task(dp.start_polling(bot, skip_updates=True))
+    print("[boot] started polling task", flush=True)
+
     try:
-        await polling_task  
+        await polling_task 
     except asyncio.CancelledError:
         pass
     except Exception as e:
-        print("Polling error:", e)
+        print("Polling error:", e, flush=True)
     finally:
+        print("[shutdown] shutting down dp and bot", flush=True)
         try:
             await dp.shutdown()
         except Exception:
@@ -1364,7 +1389,8 @@ async def main():
             pass
 
         await _shutdown_health_server(health_runner)
-        print("Shutdown complete.")
+        print("[shutdown] health server stopped. Shutdown complete.", flush=True)
+
 
 if __name__ == "__main__":
     try:

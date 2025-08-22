@@ -238,6 +238,13 @@ async def files_recognize(req: FileRequest):
                     pass
     return {"content": text, "type": mediaType}
 
+@app.get("/", include_in_schema=False)
+async def root():
+    return JSONResponse({"status": "ok"})
+
+@app.get("/healthz", include_in_schema=False)
+async def healthz():
+    return JSONResponse({"status": "healthy"})
 
 async def query_mistral(request: LLMRequest):
     url = "https://api.mistral.ai/v1/chat/completions"
