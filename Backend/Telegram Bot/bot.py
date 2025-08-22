@@ -30,6 +30,29 @@ import html
 import json
 import binascii
 
+from aiohttp import web
+
+async def handle_root(request):
+    return web.json_response({"status": "ok"})
+
+async def handle_healthz(request):
+    return web.json_response({"status": "healthy"})
+
+async def _start_health_server(port: int) -> web.AppRunner:
+    app = web.Application()
+    app.add_routes([web.get("/", handle_root), web.get("/healthz", handle_healthz)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    return runner
+
+async def _shutdown_health_server(runner: web.AppRunner):
+    try:
+        await runner.cleanup()
+    except Exception:
+        pass
+
 load_dotenv()
 router = Router()
 
@@ -1317,11 +1340,34 @@ async def success_payment_handler(message: types.message):
 
 
 async def main():
-    try:
-        await dp.start_polling(bot, skip_updates=True)
-    except Exception as e:
-        print(f"Ошибка при запуске бота: {e}")
+    port = int(os.environ.get("PORT", 8000))
 
+    health_runner = await _start_health_server(port)
+    print(f"Health server running on 0.0.0.0:{port}")
+
+
+    polling_task = asyncio.create_task(dp.start_polling(bot, skip_updates=True))
+    try:
+        await polling_task  
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        print("Polling error:", e)
+    finally:
+        try:
+            await dp.shutdown()
+        except Exception:
+            pass
+        try:
+            await bot.session.close()
+        except Exception:
+            pass
+
+        await _shutdown_health_server(health_runner)
+        print("Shutdown complete.")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Stopped by user")
