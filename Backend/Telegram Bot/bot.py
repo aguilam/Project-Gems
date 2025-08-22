@@ -31,6 +31,12 @@ import json
 import binascii
 
 from aiohttp import web
+import logging
+from typing import Optional, Any
+
+_RETRIES = 3
+_BACKOFF_BASE = 0.5
+_TIMEOUT_SECONDS = 15
 
 async def handle_root(request):
     return web.json_response({"status": "ok"})
@@ -178,28 +184,89 @@ async def cmd_start(message: types.Message):
     except aiohttp.ClientError as e:
         await message.answer(f"Ошибка подключения к серверу: {e}")
         return
-async def fetch_chats(telegram_id: int) -> dict:
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"{API_URL}/chats?telegramId={telegram_id}") as resp:
-            resp.raise_for_status()
-            return await resp.json()
 
 
-async def delete_chat(chat_id: str):
-    async with aiohttp.ClientSession() as session:
-        url = f"{API_URL}/chats/{chat_id}"
-        async with session.delete(url) as resp:
-            resp.raise_for_status()
-            return await resp.json()
+async def fetch_chats(telegram_id: int) -> list:
+    url = f"{API_URL}/chats?telegramId={telegram_id}"
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for attempt in range(1, _RETRIES + 1):
+            try:
+                async with session.get(url) as resp:
+                    text = await resp.text()
+                    logging.info("fetch_chats GET %s -> %s", url, resp.status)
+                    resp.raise_for_status()
+                    return await resp.json()
+            except aiohttp.ClientResponseError as e:
+                logging.warning("fetch_chats HTTP error %s (attempt %d): %s", url, attempt, getattr(e, "status", e))
+                if 500 <= getattr(e, "status", 500) < 600:
+                    await asyncio.sleep(_BACKOFF_BASE * attempt)
+                    continue
+                return []
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logging.warning("fetch_chats network/timeout %s (attempt %d): %s", url, attempt, e)
+                await asyncio.sleep(_BACKOFF_BASE * attempt)
+                continue
+    logging.error("fetch_chats failed after retries: %s", url)
+    return []
 
 
-async def edit_chat(chat_id: str, new_title: str):
-    async with aiohttp.ClientSession() as session:
-        url = f"{API_URL}/chats/{chat_id}"
-        payload = {"id": chat_id, "title": new_title}
-        async with session.patch(url, json=payload) as resp:
-            resp.raise_for_status()
-            return await resp.json()
+async def delete_chat(chat_id: str) -> dict | None:
+    url = f"{API_URL}/chats/{chat_id}"
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for attempt in range(1, _RETRIES + 1):
+            try:
+                async with session.delete(url) as resp:
+                    text = await resp.text()
+                    logging.info("delete_chat DELETE %s -> %s", url, resp.status)
+                    resp.raise_for_status()
+                    # некоторые API возвращают пустой body — попытка обработать корректно
+                    try:
+                        return await resp.json()
+                    except Exception:
+                        return {}
+            except aiohttp.ClientResponseError as e:
+                logging.warning("delete_chat HTTP error %s (attempt %d): %s", url, attempt, getattr(e, "status", e))
+                if 500 <= getattr(e, "status", 500) < 600:
+                    await asyncio.sleep(_BACKOFF_BASE * attempt)
+                    continue
+                return None
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logging.warning("delete_chat network/timeout %s (attempt %d): %s", url, attempt, e)
+                await asyncio.sleep(_BACKOFF_BASE * attempt)
+                continue
+    logging.error("delete_chat failed after retries: %s", url)
+    return None
+
+
+async def edit_chat(chat_id: str, new_title: str) -> dict | None:
+    url = f"{API_URL}/chats/{chat_id}"
+    payload = {"id": chat_id, "title": new_title}
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for attempt in range(1, _RETRIES + 1):
+            try:
+                async with session.patch(url, json=payload) as resp:
+                    text = await resp.text()
+                    logging.info("edit_chat PATCH %s -> %s", url, resp.status)
+                    resp.raise_for_status()
+                    try:
+                        return await resp.json()
+                    except Exception:
+                        return {}
+            except aiohttp.ClientResponseError as e:
+                logging.warning("edit_chat HTTP error %s (attempt %d): %s", url, attempt, getattr(e, "status", e))
+                if 500 <= getattr(e, "status", 500) < 600:
+                    await asyncio.sleep(_BACKOFF_BASE * attempt)
+                    continue
+                return None
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logging.warning("edit_chat network/timeout %s (attempt %d): %s", url, attempt, e)
+                await asyncio.sleep(_BACKOFF_BASE * attempt)
+                continue
+    logging.error("edit_chat failed after retries: %s", url)
+    return None
 
 
 async def show_chats_menu(target, state: FSMContext, mode: str = None):
@@ -349,26 +416,84 @@ async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
         await query.answer(f"✅ Активный чат: {chat_id}")
 
 
-async def fetch_models() -> list[dict]:
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"{API_URL}/models") as resp:
-            resp.raise_for_status()
-            return await resp.json()
+async def fetch_models() -> list:
+    url = f"{API_URL}/models"
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for attempt in range(1, _RETRIES + 1):
+            try:
+                async with session.get(url) as resp:
+                    text = await resp.text()
+                    logging.info("fetch_models GET %s -> %s", url, resp.status)
+                    resp.raise_for_status()
+                    return await resp.json()
+            except aiohttp.ClientResponseError as e:
+                logging.warning("fetch_models HTTP error %s (attempt %d): %s", url, attempt, getattr(e, "status", e))
+                if 500 <= getattr(e, "status", 500) < 600:
+                    await asyncio.sleep(_BACKOFF_BASE * attempt)
+                    continue
+                return []
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logging.warning("fetch_models network/timeout %s (attempt %d): %s", url, attempt, e)
+                await asyncio.sleep(_BACKOFF_BASE * attempt)
+                continue
+    logging.error("fetch_models failed after retries: %s", url)
+    return []
 
 
-async def fetch_user(telegram_id: int) -> dict:
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"{API_URL}/user/{telegram_id}") as resp:
-            resp.raise_for_status()
-            return await resp.json()
+async def fetch_user(telegram_id: int) -> dict | None:
+    url = f"{API_URL}/user/{telegram_id}"
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for attempt in range(1, _RETRIES + 1):
+            try:
+                async with session.get(url) as resp:
+                    text = await resp.text()
+                    logging.info("fetch_user GET %s -> %s", url, resp.status)
+                    resp.raise_for_status()
+                    return await resp.json()
+            except aiohttp.ClientResponseError as e:
+                logging.warning("fetch_user HTTP error %s (attempt %d): %s", url, attempt, getattr(e, "status", e))
+                if 500 <= getattr(e, "status", 500) < 600:
+                    await asyncio.sleep(_BACKOFF_BASE * attempt)
+                    continue
+                return None
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logging.warning("fetch_user network/timeout %s (attempt %d): %s", url, attempt, e)
+                await asyncio.sleep(_BACKOFF_BASE * attempt)
+                continue
+    logging.error("fetch_user failed after retries: %s", url)
+    return None
 
 
-async def patch_user_model(telegram_id: int, model_id: str) -> dict:
+async def patch_user_model(telegram_id: int, model_id: str) -> Optional[dict]:
+    url = f"{API_URL}/user"
     payload = {"telegramId": telegram_id, "defaultModelId": model_id}
-    async with aiohttp.ClientSession() as session:
-        async with session.patch(f"{API_URL}/user", json=payload) as resp:
-            resp.raise_for_status()
-            return await resp.json()
+    timeout = aiohttp.ClientTimeout(total=_TIMEOUT_SECONDS)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for attempt in range(1, _RETRIES + 1):
+            try:
+                async with session.patch(url, json=payload) as resp:
+                    text = await resp.text()
+                    logging.info("patch_user_model PATCH %s -> %s", url, resp.status)
+                    resp.raise_for_status()
+                    try:
+                        return await resp.json()
+                    except Exception:
+                        return {}
+            except aiohttp.ClientResponseError as e:
+                status = getattr(e, "status", None)
+                logging.warning("patch_user_model HTTP error %s (attempt %d): %s", url, attempt, status)
+                if status and 500 <= status < 600:
+                    await asyncio.sleep(_BACKOFF_BASE * attempt)
+                    continue
+                return None
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logging.warning("patch_user_model network/timeout %s (attempt %d): %s", url, attempt, e)
+                await asyncio.sleep(_BACKOFF_BASE * attempt)
+                continue
+    logging.error("patch_user_model failed after retries: %s", url)
+    return None
 
 
 def is_user_premium(user: dict) -> bool:
@@ -419,32 +544,122 @@ async def on_models_command(message: types.Message):
     await message.answer("Выберите модель:", reply_markup=kb)
 
 
-async def fetch_user_shortcuts(telegram_id: int) -> dict:
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"{API_URL}/shortcuts?telegramId={telegram_id}") as resp:
-            resp.raise_for_status()
-            return await resp.json()
+async def fetch_user_shortcuts(telegram_id: int) -> list:
+    url = f"{API_URL}/shortcuts?telegramId={telegram_id}"
+    timeout = aiohttp.ClientTimeout(total=_TIMEOUT_SECONDS)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for attempt in range(1, _RETRIES + 1):
+            try:
+                async with session.get(url) as resp:
+                    text = await resp.text()
+                    logging.info("fetch_user_shortcuts GET %s -> %s", url, resp.status)
+                    resp.raise_for_status()
+                    try:
+                        return await resp.json()
+                    except Exception:
+                        return []
+            except aiohttp.ClientResponseError as e:
+                status = getattr(e, "status", None)
+                logging.warning("fetch_user_shortcuts HTTP error %s (attempt %d): %s", url, attempt, status)
+                if status and 500 <= status < 600:
+                    await asyncio.sleep(_BACKOFF_BASE * attempt)
+                    continue
+                return []
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logging.warning("fetch_user_shortcuts network/timeout %s (attempt %d): %s", url, attempt, e)
+                await asyncio.sleep(_BACKOFF_BASE * attempt)
+                continue
+    logging.error("fetch_user_shortcuts failed after retries: %s", url)
+    return []
 
 
-async def add_shortcuts(data: int) -> dict:
-    async with aiohttp.ClientSession() as session:
-        async with session.post(f"{API_URL}/shortcuts", json=data) as resp:
-            resp.raise_for_status()
-            return await resp.json()
+async def add_shortcuts(data: dict) -> Optional[dict]:
+    # Принять data как dict (payload)
+    url = f"{API_URL}/shortcuts"
+    timeout = aiohttp.ClientTimeout(total=_TIMEOUT_SECONDS)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for attempt in range(1, _RETRIES + 1):
+            try:
+                async with session.post(url, json=data) as resp:
+                    text = await resp.text()
+                    logging.info("add_shortcuts POST %s -> %s", url, resp.status)
+                    resp.raise_for_status()
+                    try:
+                        return await resp.json()
+                    except Exception:
+                        return {}
+            except aiohttp.ClientResponseError as e:
+                status = getattr(e, "status", None)
+                logging.warning("add_shortcuts HTTP error %s (attempt %d): %s", url, attempt, status)
+                if status and 500 <= status < 600:
+                    await asyncio.sleep(_BACKOFF_BASE * attempt)
+                    continue
+                return None
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logging.warning("add_shortcuts network/timeout %s (attempt %d): %s", url, attempt, e)
+                await asyncio.sleep(_BACKOFF_BASE * attempt)
+                continue
+    logging.error("add_shortcuts failed after retries: %s", url)
+    return None
 
 
-async def delete_shortcuts(id: int) -> dict:
-    async with aiohttp.ClientSession() as session:
-        async with session.delete(f"{API_URL}/shortcuts/{id}") as resp:
-            resp.raise_for_status()
-            return await resp.json()
+async def delete_shortcuts(id: int) -> Optional[dict]:
+    url = f"{API_URL}/shortcuts/{id}"
+    timeout = aiohttp.ClientTimeout(total=_TIMEOUT_SECONDS)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for attempt in range(1, _RETRIES + 1):
+            try:
+                async with session.delete(url) as resp:
+                    text = await resp.text()
+                    logging.info("delete_shortcuts DELETE %s -> %s", url, resp.status)
+                    resp.raise_for_status()
+                    try:
+                        return await resp.json()
+                    except Exception:
+                        return {}
+            except aiohttp.ClientResponseError as e:
+                status = getattr(e, "status", None)
+                logging.warning("delete_shortcuts HTTP error %s (attempt %d): %s", url, attempt, status)
+                if status and 500 <= status < 600:
+                    await asyncio.sleep(_BACKOFF_BASE * attempt)
+                    continue
+                return None
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logging.warning("delete_shortcuts network/timeout %s (attempt %d): %s", url, attempt, e)
+                await asyncio.sleep(_BACKOFF_BASE * attempt)
+                continue
+    logging.error("delete_shortcuts failed after retries: %s", url)
+    return None
 
 
-async def patch_shortcuts(id: int) -> dict:
-    async with aiohttp.ClientSession() as session:
-        async with session.patch(f"{API_URL}/shortcuts/{id}") as resp:
-            resp.raise_for_status()
-            return await resp.json()
+async def patch_shortcuts(id: int, payload: dict | None = None) -> Optional[dict]:
+    url = f"{API_URL}/shortcuts/{id}"
+    body = payload or {}
+    timeout = aiohttp.ClientTimeout(total=_TIMEOUT_SECONDS)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for attempt in range(1, _RETRIES + 1):
+            try:
+                async with session.patch(url, json=body) as resp:
+                    text = await resp.text()
+                    logging.info("patch_shortcuts PATCH %s -> %s", url, resp.status)
+                    resp.raise_for_status()
+                    try:
+                        return await resp.json()
+                    except Exception:
+                        return {}
+            except aiohttp.ClientResponseError as e:
+                status = getattr(e, "status", None)
+                logging.warning("patch_shortcuts HTTP error %s (attempt %d): %s", url, attempt, status)
+                if status and 500 <= status < 600:
+                    await asyncio.sleep(_BACKOFF_BASE * attempt)
+                    continue
+                return None
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logging.warning("patch_shortcuts network/timeout %s (attempt %d): %s", url, attempt, e)
+                await asyncio.sleep(_BACKOFF_BASE * attempt)
+                continue
+    logging.error("patch_shortcuts failed after retries: %s", url)
+    return None
 
 
 @dp.message(Command(commands=["shortcuts"]))
@@ -483,11 +698,33 @@ async def shortcuts_command(message: types.Message, state: FSMContext):
     await state.update_data(shortcut_mode="edit")
 
 
-async def fetch_shortcut(id: int) -> dict:
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"{API_URL}/shortcuts/{id}") as resp:
-            resp.raise_for_status()
-            return await resp.json()
+async def fetch_shortcut(id: int) -> Optional[dict]:
+    url = f"{API_URL}/shortcuts/{id}"
+    timeout = aiohttp.ClientTimeout(total=_TIMEOUT_SECONDS)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for attempt in range(1, _RETRIES + 1):
+            try:
+                async with session.get(url) as resp:
+                    text = await resp.text()
+                    logging.info("fetch_shortcut GET %s -> %s", url, resp.status)
+                    resp.raise_for_status()
+                    try:
+                        return await resp.json()
+                    except Exception:
+                        return {}
+            except aiohttp.ClientResponseError as e:
+                status = getattr(e, "status", None)
+                logging.warning("fetch_shortcut HTTP error %s (attempt %d): %s", url, attempt, status)
+                if status and 500 <= status < 600:
+                    await asyncio.sleep(_BACKOFF_BASE * attempt)
+                    continue
+                return None
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logging.warning("fetch_shortcut network/timeout %s (attempt %d): %s", url, attempt, e)
+                await asyncio.sleep(_BACKOFF_BASE * attempt)
+                continue
+    logging.error("fetch_shortcut failed after retries: %s", url)
+    return None
 
 
 @dp.message(Command(commands=["help", "paysupport", "suggestion", "bug", "support"]))
@@ -500,7 +737,7 @@ async def help_form(message: types.Message):
     await message.answer(text=text, parse_mode=ParseMode.MARKDOWN_V2)
 
 
-from datetime import datetime, date
+from datetime import datetime
 
 
 @dp.message(Command(commands=["profile"]))
@@ -1338,8 +1575,7 @@ async def success_payment_handler(message: types.message):
             parse_mode=ParseMode.MARKDOWN_V2,
         )
 
-import socket
-import time
+
 async def _wait_port_up(port: int, timeout: float = 10.0) -> bool:
     def _check(port, timeout):
         deadline = time.time() + timeout
