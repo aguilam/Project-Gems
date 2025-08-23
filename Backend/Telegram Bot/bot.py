@@ -36,6 +36,9 @@ from aiohttp import web
 import logging
 from typing import Optional, Any
 
+import logging
+logging.basicConfig(level=logging.DEBUG)
+
 _RETRIES = 3
 _BACKOFF_BASE = 0.5
 _TIMEOUT_SECONDS = 15
@@ -195,7 +198,6 @@ async def fetch_chats(telegram_id: int) -> list:
         for attempt in range(1, _RETRIES + 1):
             try:
                 async with session.get(url) as resp:
-                    text = await resp.text()
                     logging.info("fetch_chats GET %s -> %s", url, resp.status)
                     resp.raise_for_status()
                     return await resp.json()
@@ -223,7 +225,6 @@ async def delete_chat(chat_id: str) -> dict | None:
                     text = await resp.text()
                     logging.info("delete_chat DELETE %s -> %s", url, resp.status)
                     resp.raise_for_status()
-                    # некоторые API возвращают пустой body — попытка обработать корректно
                     try:
                         return await resp.json()
                     except Exception:
@@ -250,7 +251,6 @@ async def edit_chat(chat_id: str, new_title: str) -> dict | None:
         for attempt in range(1, _RETRIES + 1):
             try:
                 async with session.patch(url, json=payload) as resp:
-                    text = await resp.text()
                     logging.info("edit_chat PATCH %s -> %s", url, resp.status)
                     resp.raise_for_status()
                     try:
@@ -425,7 +425,6 @@ async def fetch_models() -> list:
         for attempt in range(1, _RETRIES + 1):
             try:
                 async with session.get(url) as resp:
-                    text = await resp.text()
                     logging.info("fetch_models GET %s -> %s", url, resp.status)
                     resp.raise_for_status()
                     return await resp.json()
@@ -476,7 +475,6 @@ async def patch_user_model(telegram_id: int, model_id: str) -> Optional[dict]:
         for attempt in range(1, _RETRIES + 1):
             try:
                 async with session.patch(url, json=payload) as resp:
-                    text = await resp.text()
                     logging.info("patch_user_model PATCH %s -> %s", url, resp.status)
                     resp.raise_for_status()
                     try:
@@ -514,14 +512,20 @@ def build_keyboard(
 ) -> InlineKeyboardMarkup:
     buttons: list[InlineKeyboardButton] = []
     for m in models:
-        label = m["name"]
+        model_name = m["name"]
+        icons = ''
+        callback_data = f"model_select:{m['id']}"
         if m.get("premium", False) and not user_premium:
-            label = f"🔒 {label}"
+            icons = f"🔒{icons}"
             callback_data = "disabled"
-        else:
-            if str(m["id"]) == selected_id:
-                label = f"✅ {label}"
-            callback_data = f"model_select:{m['id']}"
+        if str(m["id"]) == selected_id:
+            icons = f"✅{icons}"
+            callback_data = "disabled"
+        if "reasoning" in m["tags"]:
+            icons = f"🧠{icons}"
+        if "image" in m["tags"]:
+            icons =  f"🖼️{icons}"
+        label = f"{icons} {model_name}"
         buttons.append(InlineKeyboardButton(text=label, callback_data=callback_data))
 
     info_btn = InlineKeyboardButton(
@@ -576,7 +580,6 @@ async def fetch_user_shortcuts(telegram_id: int) -> list:
 
 
 async def add_shortcuts(data: dict) -> Optional[dict]:
-    # Принять data как dict (payload)
     url = f"{API_URL}/shortcuts"
     timeout = aiohttp.ClientTimeout(total=_TIMEOUT_SECONDS)
     async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -612,7 +615,6 @@ async def delete_shortcuts(id: int) -> Optional[dict]:
         for attempt in range(1, _RETRIES + 1):
             try:
                 async with session.delete(url) as resp:
-                    text = await resp.text()
                     logging.info("delete_shortcuts DELETE %s -> %s", url, resp.status)
                     resp.raise_for_status()
                     try:
@@ -642,7 +644,6 @@ async def patch_shortcuts(id: int, payload: dict | None = None) -> Optional[dict
         for attempt in range(1, _RETRIES + 1):
             try:
                 async with session.patch(url, json=body) as resp:
-                    text = await resp.text()
                     logging.info("patch_shortcuts PATCH %s -> %s", url, resp.status)
                     resp.raise_for_status()
                     try:
@@ -742,22 +743,44 @@ async def help_form(message: types.Message):
 async def help_form(message: types.Message):
     user = await fetch_user(message.from_user.id)
     user_is_premium = is_user_premium(user)
+
     subscription_name = "Free"
-    user_id = user.get("telegramId")
-    subscription_expired = "-"
-    if user_is_premium != False:
-        user_subscription = user.get("subscription")
-        subscription_name = "Pro"
-        subscription_expired = datetime.fromisoformat(
-            user_subscription.get("validUntil")
-        )
-        subscription_expired_normalized_time = subscription_expired.strftime("%d.%m.%Y")
-    user_model = user.get("defaultModel")
-    user_model_name = user_model.get("name")
-    user_free_questions = user.get("freeQuestions")
-    user_premium_questions = user.get("premiumQuestions")
-    text = f"<b>👤ID:</b> {user_id} \n <b>⭐️Тип подписки:</b> {subscription_name} \n <b>📆Действует до:</b> {subscription_expired_normalized_time} \n\n ———————————————— \n\n <b>🤖Текущая модель:</b> {user_model_name} \n <b>✨Премиум вопросы:</b> {user_premium_questions} \n <b>❔Обычные вопросы:</b> {user_free_questions} "
+    subscription_expired = None
+    subscription_expired_normalized_time = "-"
+
+    user_id = user.get("telegramId", "Unknown")
+
+    if user_is_premium:
+        try:
+            user_subscription = user.get("subscription") or {}
+            valid_until = user_subscription.get("validUntil")
+            if valid_until:
+                subscription_expired = datetime.fromisoformat(valid_until)
+                subscription_expired_normalized_time = subscription_expired.strftime("%d.%m.%Y")
+            else:
+                subscription_expired_normalized_time = "-"
+            subscription_name = "Pro"
+        except Exception:
+            subscription_expired = None
+            subscription_expired_normalized_time = "-"
+            subscription_name = "Pro"
+
+    user_model = user.get("defaultModel") or {}
+    user_model_name = user_model.get("name", "Unknown")
+    user_free_questions = user.get("freeQuestions", 0)
+    user_premium_questions = user.get("premiumQuestions", 0)
+
+    text = (
+        f"<b>👤ID:</b> {user_id} \n"
+        f" <b>⭐️Тип подписки:</b> {subscription_name} \n"
+        f" <b>📆Действует до:</b> {subscription_expired_normalized_time} \n\n"
+        " ———————————————— \n\n"
+        f" <b>🤖Текущая модель:</b> {user_model_name} \n"
+        f" <b>✨Премиум вопросы:</b> {user_premium_questions} \n"
+        f" <b>❔Обычные вопросы:</b> {user_free_questions} "
+    )
     await message.answer(text=text, parse_mode=ParseMode.HTML)
+
 
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("shortcut-sel_"))
@@ -989,8 +1012,11 @@ forbidden_commands = {
 }
 
 
-@dp.message(lambda m: m.text == None or not (m.text and any(m.text.strip().startswith(cmd) for cmd in forbidden_commands)))
+@dp.message()
 async def message_router(message: types.Message, state: FSMContext):
+    txt = (message.text or message.caption or "").strip()
+    if any(txt.startswith(cmd) for cmd in forbidden_commands):
+        return 
     data = await state.get_data()
     mode = data.get("mode")
     edit_target = data.get("edit_target")

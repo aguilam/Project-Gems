@@ -6,8 +6,11 @@ from dotenv import load_dotenv
 from groq import Groq
 from fastapi.responses import JSONResponse
 import base64
-# NOTE: textract temporarily removed as requested
-# import textract
+import zipfile
+from io import BytesIO
+import tempfile
+import xml.etree.ElementTree as ET
+from html.parser import HTMLParser
 import tempfile
 from io import BytesIO
 from openpyxl import load_workbook
@@ -28,6 +31,40 @@ import logging
 from typing import Any, Dict, List, Optional, Literal
 import asyncio
 
+import logging.config
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "default": {
+            "format": "%(asctime)s %(levelname)s %(name)s: %(message)s"
+        }
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "default",
+            "level": "DEBUG",
+            "stream": "ext://sys.stdout",
+        }
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": "INFO",
+    },
+    "loggers": {
+        "uvicorn": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "uvicorn.error": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "uvicorn.access": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "__main__": {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+    },
+}
+
+logging.config.dictConfig(LOGGING)
+
+logger = logging.getLogger(__name__)
+
 
 load_dotenv()
 
@@ -43,7 +80,6 @@ MEM0_API_KEY = os.getenv("MEM0_API_KEY", "")
 client = Cerebras(
     api_key=os.environ.get("CEREBRAS_API_KEY_1"),
 )
-
 
 mem_client = AsyncMemoryClient(
     api_key=os.environ.get("MEM0_API_KEY"),
@@ -102,6 +138,71 @@ class FileRequest(BaseModel):
 
 current_user_id = contextvars.ContextVar("current_user_id", default=None)
 
+def try_decode(b: bytes) -> str:
+    for enc in ("utf-8", "cp1251", "latin1"):
+        try:
+            return b.decode(enc)
+        except Exception:
+            pass
+    return b.decode("utf-8", errors="ignore")
+
+def truncate_to_limit(s: str, limit: int = 3000) -> str:
+    if s is None:
+        return ""
+    return s[:limit]
+
+class _HTMLTextExtractor(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self._texts = []
+        self._skip = False
+        self._skip_tags = {"script", "style", "noscript"}
+
+    def handle_starttag(self, tag, attrs):
+        t = tag.lower()
+        if t in self._skip_tags:
+            self._skip = True
+        if t in {"p", "div", "br", "li", "tr", "h1","h2","h3","h4","h5"}:
+            self._texts.append("\n")
+
+    def handle_endtag(self, tag):
+        t = tag.lower()
+        if t in self._skip_tags:
+            self._skip = False
+        if t in {"p", "div", "li", "tr"}:
+            self._texts.append("\n")
+
+    def handle_data(self, data):
+        if not self._skip:
+            self._texts.append(data)
+
+    def get_text(self):
+        txt = "".join(self._texts)
+        lines = [line.strip() for line in txt.splitlines()]
+        return "\n".join([l for l in lines if l])
+
+def html_to_text(html_bytes: bytes) -> str:
+    parser = _HTMLTextExtractor()
+    parser.feed(try_decode(html_bytes))
+    return parser.get_text()
+
+def docx_bytes_to_text(b: bytes) -> str:
+    try:
+        bio = BytesIO(b)
+        with zipfile.ZipFile(bio) as z:
+            if "word/document.xml" not in z.namelist():
+                raise RuntimeError("word/document.xml не найден в .docx")
+            xml = z.read("word/document.xml")
+    except zipfile.BadZipFile:
+        raise RuntimeError(".docx повреждён или это не docx")
+    root = ET.fromstring(xml)
+    ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+    paragraphs = []
+    for p in root.findall('.//w:p', ns):
+        texts = [t.text for t in p.findall('.//w:t', ns) if t.text]
+        if texts:
+            paragraphs.append(''.join(texts))
+    return "\n".join(paragraphs)
 
 @app.middleware("http")
 async def set_user_context(request: Request, call_next):
@@ -214,7 +315,7 @@ async def files_recognize(req: FileRequest):
                 os.unlink(tmp_path)
 
     else:
-        ext = req.name.rsplit(".", 1)[-1].lower()
+        ext = req.name.rsplit(".", 1)[-1].lower() if req.name and "." in req.name else ""
         suffix = f".{ext}" if ext else ""
         tmp_path = None
         try:
@@ -222,10 +323,28 @@ async def files_recognize(req: FileRequest):
                 tmp.write(data)
                 tmp_path = tmp.name
 
-            # NOTE: textract usage removed/commented per request.
-            # Если позже захотите вернуть — раскомментируйте строку ниже и добавьте textract в requirements.
-            # raw = textract.process(tmp_path)
-            text = 'Бета фича'  # raw.decode("utf-8", errors="ignore")
+            if ext in ("txt", "md"):
+                text = try_decode(data)
+                mediaType = "text"
+                
+            elif ext == "json":
+                raw = try_decode(data)
+                try:
+                    parsed = json.loads(raw)
+                    text = json.dumps(parsed, ensure_ascii=False, indent=2)
+                except Exception:
+                    text = raw
+                mediaType = "json"
+            elif ext in ("html", "htm"):
+                text = html_to_text(data)
+                mediaType = "html"
+            elif ext == "docx":
+                
+                text = docx_bytes_to_text(data)
+                mediaType = "document"
+            else:
+                raise RuntimeError(f"Формат .{ext} не поддерживается лёгким экстрактором. Поддерживаем: txt, md, json, html, docx")
+            text = truncate_to_limit(text, 3000)
 
         except Exception as e:
             return {"error": "Processing failed", "detail": str(e)}
@@ -236,7 +355,112 @@ async def files_recognize(req: FileRequest):
                     os.unlink(tmp_path)
                 except OSError:
                     pass
+
     return {"content": text, "type": mediaType}
+
+
+def try_decode(b: bytes) -> str:
+    for enc in ("utf-8", "cp1251", "latin1"):
+        try:
+            return b.decode(enc)
+        except Exception:
+            pass
+    return b.decode("utf-8", errors="ignore")
+
+def truncate(s: str, limit: Optional[int]) -> str:
+    if limit is None:
+        return s
+    return s[:limit]
+
+class _HTMLTextExtractor(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self._texts = []
+        self._skip = False
+        self._skip_tags = {"script", "style", "noscript"}
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() in self._skip_tags:
+            self._skip = True
+        if tag.lower() in {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5"}:
+            self._texts.append("\n")
+    def handle_endtag(self, tag):
+        if tag.lower() in self._skip_tags:
+            self._skip = False
+        if tag.lower() in {"p", "div", "li", "tr"}:
+            self._texts.append("\n")
+    def handle_data(self, data):
+        if not self._skip:
+            self._texts.append(data)
+    def get_text(self):
+        txt = "".join(self._texts)
+        lines = [line.strip() for line in txt.splitlines()]
+        return "\n".join([l for l in lines if l])
+
+def html_to_text(html_bytes: bytes) -> str:
+    parser = _HTMLTextExtractor()
+    parser.feed(try_decode(html_bytes))
+    return parser.get_text()
+
+
+def docx_bytes_to_text(b: bytes) -> str:
+
+    try:
+        with zipfile.ZipFile(io := _BytesIOWrapper(b)) as z:
+            names = z.namelist()
+            if "word/document.xml" not in names:
+                raise RuntimeError("word/document.xml не найден в .docx")
+            xml = z.read("word/document.xml")
+    except zipfile.BadZipFile:
+        raise RuntimeError("Файл .docx повреждён или это не docx")
+    # парсим xml
+    root = ET.fromstring(xml)
+    ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+    paragraphs = []
+    for p in root.findall('.//w:p', ns):
+        texts = [t.text for t in p.findall('.//w:t', ns) if t.text]
+        if texts:
+            paragraphs.append(''.join(texts))
+    return "\n".join(paragraphs)
+
+class _BytesIOWrapper:
+    def __init__(self, b: bytes):
+        from io import BytesIO
+        self._buf = BytesIO(b)
+    def read(self, *args, **kwargs):
+        return self._buf.read(*args, **kwargs)
+    def seek(self, *args, **kwargs):
+        return self._buf.seek(*args, **kwargs)
+    def tell(self, *args, **kwargs):
+        return self._buf.tell(*args, **kwargs)
+    def close(self):
+        return self._buf.close()
+
+def extract_text_from_bytes(data: bytes, name: str, max_chars: Optional[int] = None) -> str:
+    if not name:
+        raise ValueError("Нужно указать имя файла (для определения расширения).")
+    ext = os.path.splitext(name)[-1].lower().lstrip(".")
+    if ext in ("txt", "md"):
+        out = try_decode(data)
+    elif ext == "json":
+        txt = try_decode(data)
+        try:
+            obj = json.loads(txt)
+            out = json.dumps(obj, ensure_ascii=False, indent=2)
+        except Exception:
+            out = txt
+    elif ext in ("html", "htm"):
+        out = html_to_text(data)
+    elif ext == "docx":
+        out = docx_bytes_to_text(data)
+    else:
+        raise ValueError(f"Формат .{ext} не поддерживается этим лёгким экстрактором.")
+    return truncate(out, max_chars)
+
+def extract_text_from_path(path: str, max_chars: Optional[int] = None) -> str:
+    with open(path, "rb") as f:
+        data = f.read()
+    name = os.path.basename(path)
+    return extract_text_from_bytes(data, name=name, max_chars=max_chars)
 
 @app.get("/", include_in_schema=False)
 async def root():
@@ -697,14 +921,19 @@ tools = [
     {
         "type": "function",
         "function": {
-            "name": "ocr_tool",
-            "description": "Распознаёт изображение Base64 и возвращает текст",
-            "parameters": {
-                "type": "object",
-                "properties": {"image_b64": {"type": "string"}},
-                "required": ["image_b64"],
+          "name": "ocr_tool",
+          "description": "Распознаёт изображение Base64 и возвращает текст",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "imageBase64": {
+                "type": "string",
+                "description": "Base64-код изображения (data without data:image/... prefix)"
+              }
             },
-        },
+            "required": ["imageBase64"]
+          }
+        }
     },
     {
         "type": "function",

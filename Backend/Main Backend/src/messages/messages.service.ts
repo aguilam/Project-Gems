@@ -207,7 +207,7 @@ export class MessagesService {
           model: model.systemName,
           provider: model.provider,
           premium: true,
-          is_agent: true,
+          is_agent: user.subscription?.status == 'ACTIVE',
         },
         {
           headers: {
