@@ -38,7 +38,7 @@ export class ChatsService {
     return chat;
   }
 
-  async getAllChats(telegramId: number) {
+  async getAllChats(telegramId: string) {
     const chats = await this.prisma.chat.findMany({
       where: { users: { some: { telegramId } } },
     });

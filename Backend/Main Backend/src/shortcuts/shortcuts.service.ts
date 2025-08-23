@@ -19,7 +19,7 @@ export class ShortcutsService {
     instruction: string;
     command: string;
     modelId: string;
-    telegramId: number;
+    telegramId: string;
   }) {
     const forbiddenNames = ['/start', '/chats', '/roles'];
 
@@ -58,7 +58,7 @@ export class ShortcutsService {
       return shortcut;
     }
   }
-  async getShortcutsByTelegramId(telegramId: number) {
+  async getShortcutsByTelegramId(telegramId: string) {
     const user = await this.prismaService.user.findUnique({
       where: {
         telegramId: telegramId,

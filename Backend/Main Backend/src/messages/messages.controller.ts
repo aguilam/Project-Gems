@@ -15,7 +15,7 @@ export interface FileDTO {
 }
 
 export class MessageDTO {
-  telegramId: number;
+  telegramId: string;
   prompt: string;
   image?: string;
   file?: FileDTO;
@@ -44,7 +44,7 @@ export class MessagesController {
         mime: uploadedFile.mimetype,
       };
       return this.messagesService.sentUserMessage({
-        telegramId: +dto.telegramId,
+        telegramId: dto.telegramId,
         prompt: dto.prompt,
         image: dto.image,
         file: file,
@@ -53,7 +53,7 @@ export class MessagesController {
       });
     } else {
       return this.messagesService.sentUserMessage({
-        telegramId: +dto.telegramId,
+        telegramId: dto.telegramId,
         prompt: dto.prompt,
         image: dto.image,
         chatId: dto.chatId,

@@ -1,7 +1,7 @@
 import { Controller, Get } from '@nestjs/common';
 import { ModelsService } from './models.service';
 export class ChatCreateDto {
-  telegramId: number;
+  telegramId: string;
 }
 @Controller('models')
 export class ModelsController {

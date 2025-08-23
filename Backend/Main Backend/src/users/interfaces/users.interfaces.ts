@@ -1,6 +1,6 @@
 export interface User {
   id: number;
-  telegramId: number;
+  telegramId: string;
   userName: string;
   systemPrompt: string;
   defaultModel: string;

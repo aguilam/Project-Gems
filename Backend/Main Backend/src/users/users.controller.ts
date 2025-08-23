@@ -9,12 +9,12 @@ import {
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 export class LoginDto {
-  telegramId: number;
+  telegramId: string;
   username?: string;
 }
 
 export class UpdateUserDto {
-  telegramId: number;
+  telegramId: string;
   userName?: string;
   systemPrompt?: string;
   defaultModelId?: string;
@@ -30,7 +30,7 @@ export class usersController {
   }
 
   @Get(':telegramId')
-  getUser(@Param('telegramId', ParseIntPipe) telegramId: number) {
+  getUser(@Param('telegramId', ParseIntPipe) telegramId: string) {
     return this.usersService.getUserByTelegramId(telegramId);
   }
 

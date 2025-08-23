@@ -3,11 +3,11 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
 
 export class User {
-  telegramId: number;
+  telegramId: string;
   username?: string;
 }
 export class UpdateUserDto {
-  telegramId: number;
+  telegramId: string;
   userName?: string;
   systemPrompt?: string;
   defaultModelId?: string;
@@ -35,7 +35,7 @@ export class UsersService {
     return user;
   }
 
-  async getUserByTelegramId(telegramId: number) {
+  async getUserByTelegramId(telegramId: string) {
     const user = await this.prisma.user.findUnique({
       where: { telegramId },
       include: {

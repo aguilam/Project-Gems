@@ -24,7 +24,7 @@ export interface ResponseDTO {
 }
 
 export class MessageDTO {
-  telegramId: number;
+  telegramId: string;
   prompt: string;
   image?: string;
   file?: FileDTO;

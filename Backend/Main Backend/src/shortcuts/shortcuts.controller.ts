@@ -21,7 +21,7 @@ export class ShortcutsController {
       instruction: string;
       command: string;
       modelId: string;
-      telegramId: number;
+      telegramId: string;
     },
   ) {
     const shortcut = await this.shortcutService.postNewShortcut(dto);
@@ -29,9 +29,9 @@ export class ShortcutsController {
   }
 
   @Get()
-  async getUserShortcuts(@Query('telegramId') telegramId: number) {
+  async getUserShortcuts(@Query('telegramId') telegramId: string) {
     const userShortcuts =
-      await this.shortcutService.getShortcutsByTelegramId(+telegramId);
+      await this.shortcutService.getShortcutsByTelegramId(telegramId);
     return userShortcuts;
   }
 

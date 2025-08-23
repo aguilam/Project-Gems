@@ -23,8 +23,8 @@ export class ChatsController {
   }
 
   @Get()
-  getChats(@Query('telegramId') telegramId: number) {
-    return this.chatsService.getAllChats(+telegramId);
+  getChats(@Query('telegramId') telegramId: string) {
+    return this.chatsService.getAllChats(telegramId);
   }
 
   @Delete(':id')
