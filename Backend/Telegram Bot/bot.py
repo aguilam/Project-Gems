@@ -270,7 +270,20 @@ async def edit_chat(chat_id: str, new_title: str) -> dict | None:
     logging.error("edit_chat failed after retries: %s", url)
     return None
 
-
+@dp.message(Command(commands=["pro", "premium"]))
+async def send_offer(message: types.message):
+    text = (
+        "✨ Pro подписка — что вы получите:\n\n"
+        "• 1000 обычных и 120 премиум вопросов\n"
+        "• Доступ к премиум-моделям генерации текста и изображений\n"
+        "• Распознавание голосовых сообщений других пользователей\n"
+        "• Шорткаты для быстрого доступа\n"
+        "• Агентские функции (поиск, улучшенная память, запуск Python, модуль WolframAlpha)\n"
+        "• Получаете новые функции первыми\n\n"
+        "Нажмите «Оплатить», чтобы оформить подписку."
+    )
+    await message.answer(text=text, reply_markup=offer_keyboard())
+    
 async def show_chats_menu(target, state: FSMContext, mode: str = None):
     data = await state.get_data()
     active_chat = data.get("active_chat")
@@ -1518,21 +1531,6 @@ def invoice_keyboard():
     return kb.as_markup()
 
 
-@dp.message(Command(commands=["pro", "premium"]))
-async def send_offer(message: types.message):
-    text = (
-        "✨ Pro подписка — что вы получите:\n\n"
-        "• 1000 обычных и 120 премиум вопросов\n"
-        "• Доступ к премиум-моделям генерации текста и изображений\n"
-        "• Распознавание голосовых сообщений других пользователей\n"
-        "• Шорткаты для быстрого доступа\n"
-        "• Агентские функции (поиск, улучшенная память, запуск Python, модуль WolframAlpha)\n"
-        "• Получаете новые функции первыми\n\n"
-        "Нажмите «Оплатить», чтобы оформить подписку."
-    )
-    await message.answer(text=text, reply_markup=offer_keyboard())
-
-
 @dp.callback_query()
 async def callback_buy_premium(callback: CallbackQuery):
     if callback.data != "buy_premium":
@@ -1600,7 +1598,7 @@ async def success_payment_handler(message: types.message):
             text=f"❗ Проблема при записи подписки: `{safe_error}`",
             parse_mode=ParseMode.MARKDOWN_V2,
         )
-
+import socket
 
 async def _wait_port_up(port: int, timeout: float = 10.0) -> bool:
     def _check(port, timeout):

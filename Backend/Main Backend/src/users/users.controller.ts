@@ -31,7 +31,7 @@ export class usersController {
 
   @Get(':telegramId')
   getUser(@Param('telegramId', ParseIntPipe) telegramId: string) {
-    return this.usersService.getUserByTelegramId(telegramId);
+    return this.usersService.getUserByTelegramId(String(telegramId));
   }
 
   @Patch()

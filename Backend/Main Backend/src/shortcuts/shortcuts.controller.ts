@@ -30,8 +30,9 @@ export class ShortcutsController {
 
   @Get()
   async getUserShortcuts(@Query('telegramId') telegramId: string) {
-    const userShortcuts =
-      await this.shortcutService.getShortcutsByTelegramId(telegramId);
+    const userShortcuts = await this.shortcutService.getShortcutsByTelegramId(
+      String(telegramId),
+    );
     return userShortcuts;
   }
 

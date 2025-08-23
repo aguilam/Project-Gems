@@ -44,7 +44,7 @@ export class MessagesController {
         mime: uploadedFile.mimetype,
       };
       return this.messagesService.sentUserMessage({
-        telegramId: dto.telegramId,
+        telegramId: String(dto.telegramId),
         prompt: dto.prompt,
         image: dto.image,
         file: file,
@@ -53,7 +53,7 @@ export class MessagesController {
       });
     } else {
       return this.messagesService.sentUserMessage({
-        telegramId: dto.telegramId,
+        telegramId: String(dto.telegramId),
         prompt: dto.prompt,
         image: dto.image,
         chatId: dto.chatId,

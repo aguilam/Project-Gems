@@ -24,7 +24,7 @@ export class ChatsController {
 
   @Get()
   getChats(@Query('telegramId') telegramId: string) {
-    return this.chatsService.getAllChats(telegramId);
+    return this.chatsService.getAllChats(String(telegramId));
   }
 
   @Delete(':id')

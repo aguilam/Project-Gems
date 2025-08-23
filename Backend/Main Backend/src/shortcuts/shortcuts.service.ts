@@ -32,7 +32,7 @@ export class ShortcutsService {
     });
     const user = await this.prismaService.user.findUnique({
       where: {
-        telegramId: dto.telegramId,
+        telegramId: String(dto.telegramId),
       },
     });
 
@@ -61,7 +61,7 @@ export class ShortcutsService {
   async getShortcutsByTelegramId(telegramId: string) {
     const user = await this.prismaService.user.findUnique({
       where: {
-        telegramId: telegramId,
+        telegramId: String(telegramId),
       },
     });
     if (user) {

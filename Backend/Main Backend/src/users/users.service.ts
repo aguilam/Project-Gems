@@ -17,6 +17,7 @@ export class UsersService {
   constructor(private prisma: PrismaService) {}
 
   async login(dto: User) {
+    dto.telegramId = String(dto.telegramId);
     const user = await this.prisma.user.upsert({
       where: { telegramId: dto.telegramId },
       create: {
@@ -36,6 +37,7 @@ export class UsersService {
   }
 
   async getUserByTelegramId(telegramId: string) {
+    telegramId = String(telegramId);
     const user = await this.prisma.user.findUnique({
       where: { telegramId },
       include: {
@@ -47,25 +49,23 @@ export class UsersService {
   }
 
   async updateUserInfo(dto: UpdateUserDto) {
-    const { telegramId, defaultModelId, ...rest } = dto;
-    if (!telegramId) {
-      throw new BadRequestException('telegramId is required');
-    }
+    const { defaultModelId, telegramId: incomingTelegramId, ...rest } = dto;
+    const telegramId = String(incomingTelegramId);
+    if (!telegramId) throw new BadRequestException('telegramId is required');
 
     const updateData: Record<string, any> = { ...rest };
 
     if (defaultModelId !== undefined) {
       const trimmedId = defaultModelId.trim();
-
       const model = await this.prisma.aIModel.findUnique({
         where: { id: trimmedId },
       });
-      if (!model) {
+      if (!model)
         throw new BadRequestException(`Модель с id="${trimmedId}" не найдена.`);
-      }
-
       updateData.defaultModel = { connect: { id: trimmedId } };
     }
+
+    if ('telegramId' in updateData) delete updateData.telegramId;
 
     const user = await this.prisma.user.update({
       where: { telegramId },

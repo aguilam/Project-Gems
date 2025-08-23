@@ -43,6 +43,7 @@ export class MessagesService {
 
   async sentUserMessage(dto: MessageDTO) {
     try {
+      dto.telegramId = String(dto.telegramId);
       const user = await this.prisma.user.findUnique({
         where: {
           telegramId: dto.telegramId,
