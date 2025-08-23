@@ -1015,6 +1015,8 @@ forbidden_commands = {
 @dp.message()
 async def message_router(message: types.Message, state: FSMContext):
     txt = (message.text or message.caption or "").strip()
+    if message.text == None:
+        return
     if any(txt.startswith(cmd) for cmd in forbidden_commands):
         return 
     data = await state.get_data()
