@@ -1076,15 +1076,25 @@ async def cb_role_select(query: types.CallbackQuery, state: FSMContext):
         await query.answer("✅ Системный промпт обновлён")
         await show_roles_menu(query, state)
 
-def extract_and_strip_think(text: str) -> tuple[str, str]:
-    think_blocks = re.findall(
-        r"<think\b[^>]*>([\s\S]*?)</think\s*>", text, flags=re.IGNORECASE
-    )
-    think_text = ("\n\n".join(tb.strip() for tb in think_blocks)).strip()
-    visible_text = re.sub(
-        r"<think\b[^>]*>[\s\S]*?</think\s*>", "", text, flags=re.IGNORECASE
-    ).strip()
-    return visible_text, think_text
+import re
+from typing import Tuple
+
+def extract_and_strip_think(text: str) -> Tuple[str, str]:
+    m = re.search(r"<think\b[^>]*>([\s\S]*?)</think\s*>", text, flags=re.IGNORECASE)
+    if m:
+        think_text = m.group(1).strip()
+        visible_text = (text[:m.start()] + text[m.end():]).strip()
+        return visible_text, think_text
+
+    m_close = re.search(r"</think\s*>", text, flags=re.IGNORECASE)
+    if m_close:
+        think_text = text[: m_close.start()].strip()
+        visible_text = text[m_close.end() :].strip()
+        return visible_text, think_text
+
+    return text.strip(), ""
+
+
 
 
 def is_blank_simple(s: str) -> bool:

@@ -249,7 +249,6 @@ export class MessagesService {
           },
         });
       }
-      console.log(responseData);
       if (model.premium) {
         await this.prisma.user.update({
           where: {

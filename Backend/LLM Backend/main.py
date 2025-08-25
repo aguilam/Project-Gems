@@ -502,13 +502,9 @@ async def query_mistral(request: LLMRequest):
 
 
 async def query_cloudflare(request: LLMRequest):
-    url = (
-        f"https://api.cloudflare.com/client/v4/accounts/"
-        f"5054130e5a7ddf582ed30bdae4809a82/ai/run/@{request.model}"
-    )
-    user_messages = [m.dict() for m in request.prompt]
+    url = f"https://api.cloudflare.com/client/v4/accounts/5054130e5a7ddf582ed30bdae4809a82/ai/run/@{request.model}"
+    payload = {"prompt": [m.dict() for m in request.prompt][-1]["content"]}
     headers = {"Authorization": f"Bearer {CLOUDFLARE_API_KEY}"}
-    payload = {"prompt": user_messages[-1]["content"]}
     timeout = httpx.Timeout(
         connect=60.0,
         read=120.0,
@@ -519,19 +515,51 @@ async def query_cloudflare(request: LLMRequest):
         try:
             resp = await client.post(url, json=payload, headers=headers)
         except httpx.ReadTimeout:
-            raise HTTPException(
-                504,
-                detail="Upstream Read Timeout: модель не успела ответить за отведённое время",
-            )
+            raise HTTPException(504, "Upstream Read Timeout: модель не успела ответить")
         except httpx.RequestError as e:
-            raise HTTPException(502, detail=f"Upstream Request Error: {e}")
+            raise HTTPException(502, f"Upstream Request Error: {e}")
 
         if resp.status_code != 200:
             raise HTTPException(status_code=resp.status_code, detail=resp.text)
 
-        raw_bytes = await resp.aread()
-        encoded = base64.b64encode(raw_bytes).decode("ascii")
-        return JSONResponse(content={"type": "image", "content": encoded})
+        # Попробуем получить base64 из JSON result.image (или похожих полей)
+        ct = resp.headers.get("content-type", "")
+        if "application/json" in ct or resp.text.strip().startswith(("{", "[")):
+            try:
+                data = resp.json()
+                # ищем в result / image / images
+                candidate = None
+                if isinstance(data, dict):
+                    result = data.get("result", data)
+                    for key in ("image", "images", "artifact", "artifacts"):
+                        candidate = result.get(key) if isinstance(result, dict) else None
+                        if candidate:
+                            break
+                # нормализуем
+                if isinstance(candidate, list) and candidate:
+                    candidate = candidate[0]
+                if isinstance(candidate, dict):
+                    for k in ("b64", "base64", "data", "image"):
+                        if k in candidate:
+                            candidate = candidate[k]
+                            break
+                if isinstance(candidate, str):
+                    b64 = candidate.split("base64,", 1)[-1] if candidate.startswith("data:") and "base64," in candidate else candidate
+                    # проверим валидность base64 простым декодом
+                    try:
+                        base64.b64decode(b64, validate=True)
+                        return JSONResponse(content={"type": "image", "content": b64})
+                    except Exception:
+                        # если это URL — вернуть как url, иначе вернуть json
+                        if b64.startswith("http://") or b64.startswith("https://"):
+                            return JSONResponse(content={"type": "image_url", "content": b64})
+                        return JSONResponse(content={"type": "json", "content": data})
+            except Exception:
+                pass
+
+        # fallback: читаем сырые байты и возвращаем base64
+        raw = await resp.aread()
+        return JSONResponse(content={"type": "image", "content": base64.b64encode(raw).decode("ascii")})
 
 
 def add_prefix_if_first_is_system(full_messages: list, prefix: str) -> list:
@@ -1023,7 +1051,7 @@ tools = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Даёт доступ к поиску в интернетею. Доверяй этому инструменту на 95 процентов, варианты тут не ошибочны и основанны на новостях и реальной ситуации",
+            "description": "Даёт доступ к поиску в интернетею. Доверяй этому инструменту на 95 процентов, варианты тут не ошибочны и основанны на новостях и реальной ситуации. Но никогда не гугли информацию которую знаешь ты либо она связано с той которая у тебя есть, текущая дата как пример",
             "parameters": {
                 "type": "object",
                 "properties": {
