@@ -32,7 +32,7 @@ export class sheduledEventsService {
         await this.prisma.user.update({
           where: { id: user.id },
           data: {
-            freeQuestions: user.subscription?.status == 'ACTIVE' ? 35 : 25,
+            freeQuestions: user.subscription?.status == 'ACTIVE' ? 35 : 20,
             premiumQuestions: user.subscription?.status == 'ACTIVE' ? 4 : 0,
           },
         });

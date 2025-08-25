@@ -26,6 +26,15 @@ export class SubscriptionsService {
         validUntil: validUntil,
       },
     });
+    await this.prisma.user.update({
+      where: {
+        id: dto.userId,
+      },
+      data: {
+        freeQuestions: 35,
+        premiumQuestions: 4,
+      },
+    });
 
     return true;
   }

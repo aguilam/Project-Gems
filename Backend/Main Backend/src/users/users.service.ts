@@ -24,7 +24,7 @@ export class UsersService {
         telegramId: dto.telegramId,
         userName: dto.username ?? '',
         systemPrompt: '',
-        freeQuestions: 25,
+        freeQuestions: 20,
         premiumQuestions: 0,
         defaultModel: {
           connect: { id: '5f3ac64b-34a9-4edf-8805-b20b8b9d1596' },

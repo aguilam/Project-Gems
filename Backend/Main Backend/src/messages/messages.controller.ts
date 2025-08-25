@@ -33,7 +33,7 @@ export class MessagesController {
       limits: { fileSize: 10 * 1024 * 1024 },
     }),
   )
-  createMessage(
+  async createMessage(
     @Body() dto: MessageDTO,
     @UploadedFile() uploadedFile?: Express.Multer.File,
   ) {
@@ -43,7 +43,7 @@ export class MessagesController {
         name: uploadedFile.originalname,
         mime: uploadedFile.mimetype,
       };
-      return this.messagesService.sentUserMessage({
+      return await this.messagesService.sentUserMessage({
         telegramId: String(dto.telegramId),
         prompt: dto.prompt,
         image: dto.image,
@@ -52,7 +52,7 @@ export class MessagesController {
         chatId: dto.chatId,
       });
     } else {
-      return this.messagesService.sentUserMessage({
+      return await this.messagesService.sentUserMessage({
         telegramId: String(dto.telegramId),
         prompt: dto.prompt,
         image: dto.image,

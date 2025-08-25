@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   HttpException,
   InternalServerErrorException,
+  NotFoundException,
 } from '@nestjs/common';
 import axios from 'axios';
 import { PrismaService } from 'prisma/prisma.service';
@@ -62,23 +63,33 @@ export class MessagesService {
       let modelId = user.defaultModelId;
       let questionsCost = 0;
       const previousMessages: { content: string; role: string }[] = [];
-      if (dto.prompt.charAt(0) == '/') {
+      if (dto.prompt.charAt(0) === '/') {
         const trimmedPrompt = dto.prompt.trim();
-        const endCommandPosition = dto.prompt.indexOf(' ');
-        const userCommand = trimmedPrompt.slice(0, endCommandPosition);
-        fullPrompt = trimmedPrompt.slice(
-          endCommandPosition,
-          trimmedPrompt.length,
-        );
+
+        const firstSpace = trimmedPrompt.indexOf(' ');
+
+        const userCommand =
+          firstSpace === -1
+            ? trimmedPrompt
+            : trimmedPrompt.slice(0, firstSpace);
+
+        const rest =
+          firstSpace === -1 ? '' : trimmedPrompt.slice(firstSpace + 1).trim();
+
         const shortcut = await this.prisma.shortcut.findFirst({
           where: {
             userId: user?.id,
             command: userCommand,
           },
         });
+
         if (shortcut) {
-          fullPrompt = `${shortcut.instruction} ${fullPrompt}`;
-          modelId = shortcut?.modelId;
+          fullPrompt = rest
+            ? `${shortcut.instruction} ${rest}`
+            : `${shortcut.instruction}`;
+          modelId = shortcut.modelId;
+        } else {
+          fullPrompt = rest;
         }
       }
       const model = await this.prisma.aIModel.findUnique({
@@ -95,10 +106,7 @@ export class MessagesService {
         throw new Error('Модель не найдена');
       }
 
-      if (
-        model.premium &&
-        (!(user.subscription?.status == 'ACTIVE') || user.premiumQuestions <= 0)
-      ) {
+      if (model.premium && user.premiumQuestions <= 0) {
         throw new ForbiddenException('У вас закончились премиум вопросы');
       }
 
@@ -108,28 +116,26 @@ export class MessagesService {
 
       if (dto.image) {
         ocrResult = await this.ocrService.imageOcr(dto.image);
+        fullPrompt = `${ocrResult}\n\nЗапрос пользователя:${dto.prompt}`;
       }
 
       if (dto.file) {
         fileRecognizeResult = await this.FileRecognizeService.recognize(
           dto.file,
         );
-
+        fullPrompt = `${fileRecognizeResult}\n\nЗапрос пользователя:${dto.prompt}`;
         if (fileRecognizeResult && model.premium !== true) {
           questionsCost++;
         }
       }
 
-      if (ocrResult) {
-        fullPrompt = `${ocrResult}\n\n${dto.prompt}`;
-      } else if (!(fileRecognizeResult.trim() == '')) {
-        fullPrompt = `${fileRecognizeResult}\n\n${dto.prompt}`;
-      }
       let chat;
       if (dto.chatId && !(dto.chatId == '0')) {
         chat = await this.chatsService.getChatById(dto.chatId);
-        if (!chat) {
-          throw new Error('Чат не найден');
+        if (!chat || chat == null) {
+          throw new NotFoundException(
+            'Чат не найден, попробуйте выбрать другой',
+          );
         }
         const chatMessages = chat.messages;
         for (let i = 0; i < chatMessages.length; i++) {
@@ -183,12 +189,6 @@ export class MessagesService {
           response.data.content as string,
         );
       }
-      //if (!(fileRecognizeResult.trim() == '') && dto.isForwarded == true) {
-      //  return {
-      //    content: fileRecognizeResult,
-      //    type: 'text',
-      //  };
-      //}
       const userMessage = await this.prisma.message.create({
         data: {
           chatId: chat.id,
@@ -201,21 +201,36 @@ export class MessagesService {
         content: fullPrompt,
         role: 'user',
       });
-      const response = await axios.post(
-        `${this.configService.get<string>('LLM_SERVER_URL')}/llm`,
-        {
-          prompt: previousMessages,
-          model: model.systemName,
-          provider: model.provider,
-          premium: true,
-          is_agent: user.subscription?.status == 'ACTIVE',
-        },
-        {
-          headers: {
-            'X-User-Id': user.id,
+      let response;
+      try {
+        response = await axios.post(
+          `${this.configService.get<string>('LLM_SERVER_URL')}/llm`,
+          {
+            prompt: previousMessages,
+            model: model.systemName,
+            provider: model.provider,
+            premium: true,
+            is_agent: user.subscription?.status == 'ACTIVE',
           },
-        },
-      );
+          {
+            headers: {
+              'X-User-Id': String(user.id),
+            },
+            timeout: 60_000,
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity,
+          },
+        );
+      } catch (e) {
+        console.error(
+          'Ошибка при вызове LLM:',
+          e?.response?.status,
+          e?.response?.data ?? e.message ?? e,
+        );
+        throw new InternalServerErrorException(
+          'Ошибка обращения с LLM: ' + String(e?.message ?? e),
+        );
+      }
       if (response) {
         questionsCost++;
         if (Number(response.headers['agent-use']) > 0) {
@@ -223,16 +238,18 @@ export class MessagesService {
         }
       }
       const responseData: ResponseDTO = response.data;
-      await this.prisma.message.create({
-        data: {
-          chatId: chat.id,
-          senderId: user.id,
-          role: 'assistant',
-          content: responseData.content,
-          replyToId: userMessage.id,
-        },
-      });
-
+      if (responseData.type != 'image') {
+        await this.prisma.message.create({
+          data: {
+            chatId: chat.id,
+            senderId: user.id,
+            role: 'assistant',
+            content: responseData.content,
+            replyToId: userMessage.id,
+          },
+        });
+      }
+      console.log(responseData);
       if (model.premium) {
         await this.prisma.user.update({
           where: {

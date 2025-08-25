@@ -30,6 +30,10 @@ from email.utils import parsedate_to_datetime
 import logging
 from typing import Any, Dict, List, Optional, Literal
 import asyncio
+try:
+    from docx import Document
+except Exception as e:
+    Document = None
 
 import logging.config
 
@@ -37,9 +41,7 @@ LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
-        "default": {
-            "format": "%(asctime)s %(levelname)s %(name)s: %(message)s"
-        }
+        "default": {"format": "%(asctime)s %(levelname)s %(name)s: %(message)s"}
     },
     "handlers": {
         "console": {
@@ -56,7 +58,11 @@ LOGGING = {
     "loggers": {
         "uvicorn": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "uvicorn.error": {"handlers": ["console"], "level": "INFO", "propagate": False},
-        "uvicorn.access": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "uvicorn.access": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
         "__main__": {"handlers": ["console"], "level": "DEBUG", "propagate": False},
     },
 }
@@ -138,6 +144,7 @@ class FileRequest(BaseModel):
 
 current_user_id = contextvars.ContextVar("current_user_id", default=None)
 
+
 def try_decode(b: bytes) -> str:
     for enc in ("utf-8", "cp1251", "latin1"):
         try:
@@ -146,10 +153,12 @@ def try_decode(b: bytes) -> str:
             pass
     return b.decode("utf-8", errors="ignore")
 
+
 def truncate_to_limit(s: str, limit: int = 3000) -> str:
     if s is None:
         return ""
     return s[:limit]
+
 
 class _HTMLTextExtractor(HTMLParser):
     def __init__(self):
@@ -162,7 +171,7 @@ class _HTMLTextExtractor(HTMLParser):
         t = tag.lower()
         if t in self._skip_tags:
             self._skip = True
-        if t in {"p", "div", "br", "li", "tr", "h1","h2","h3","h4","h5"}:
+        if t in {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5"}:
             self._texts.append("\n")
 
     def handle_endtag(self, tag):
@@ -181,28 +190,46 @@ class _HTMLTextExtractor(HTMLParser):
         lines = [line.strip() for line in txt.splitlines()]
         return "\n".join([l for l in lines if l])
 
+
 def html_to_text(html_bytes: bytes) -> str:
     parser = _HTMLTextExtractor()
     parser.feed(try_decode(html_bytes))
     return parser.get_text()
 
 def docx_bytes_to_text(b: bytes) -> str:
+
+    if Document is None:
+        raise RuntimeError("python-docx не установлен (pip install python-docx)")
+
+    bio = BytesIO(b)
+    doc = Document(bio)
+
+    parts = []
+    for p in doc.paragraphs:
+        if p.text:
+            parts.append(p.text)
+
+    for table in doc.tables:
+        for row in table.rows:
+            row_texts = [cell.text for cell in row.cells]
+            if any(row_texts):
+                parts.append("\t".join(row_texts))
+
     try:
-        bio = BytesIO(b)
-        with zipfile.ZipFile(bio) as z:
-            if "word/document.xml" not in z.namelist():
-                raise RuntimeError("word/document.xml не найден в .docx")
-            xml = z.read("word/document.xml")
-    except zipfile.BadZipFile:
-        raise RuntimeError(".docx повреждён или это не docx")
-    root = ET.fromstring(xml)
-    ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
-    paragraphs = []
-    for p in root.findall('.//w:p', ns):
-        texts = [t.text for t in p.findall('.//w:t', ns) if t.text]
-        if texts:
-            paragraphs.append(''.join(texts))
-    return "\n".join(paragraphs)
+        for section in doc.sections:
+            header = section.header
+            footer = section.footer
+            for p in header.paragraphs:
+                if p.text:
+                    parts.append(p.text)
+            for p in footer.paragraphs:
+                if p.text:
+                    parts.append(p.text)
+    except Exception:
+        pass
+
+    return "\n".join(parts)
+
 
 @app.middleware("http")
 async def set_user_context(request: Request, call_next):
@@ -315,7 +342,9 @@ async def files_recognize(req: FileRequest):
                 os.unlink(tmp_path)
 
     else:
-        ext = req.name.rsplit(".", 1)[-1].lower() if req.name and "." in req.name else ""
+        ext = (
+            req.name.rsplit(".", 1)[-1].lower() if req.name and "." in req.name else ""
+        )
         suffix = f".{ext}" if ext else ""
         tmp_path = None
         try:
@@ -326,7 +355,7 @@ async def files_recognize(req: FileRequest):
             if ext in ("txt", "md"):
                 text = try_decode(data)
                 mediaType = "text"
-                
+
             elif ext == "json":
                 raw = try_decode(data)
                 try:
@@ -339,11 +368,13 @@ async def files_recognize(req: FileRequest):
                 text = html_to_text(data)
                 mediaType = "html"
             elif ext == "docx":
-                
+
                 text = docx_bytes_to_text(data)
                 mediaType = "document"
             else:
-                raise RuntimeError(f"Формат .{ext} не поддерживается лёгким экстрактором. Поддерживаем: txt, md, json, html, docx")
+                raise RuntimeError(
+                    f"Формат .{ext} не поддерживается лёгким экстрактором. Поддерживаем: txt, md, json, html, docx"
+                )
             text = truncate_to_limit(text, 3000)
 
         except Exception as e:
@@ -367,10 +398,12 @@ def try_decode(b: bytes) -> str:
             pass
     return b.decode("utf-8", errors="ignore")
 
+
 def truncate(s: str, limit: Optional[int]) -> str:
     if limit is None:
         return s
     return s[:limit]
+
 
 class _HTMLTextExtractor(HTMLParser):
     def __init__(self):
@@ -378,64 +411,37 @@ class _HTMLTextExtractor(HTMLParser):
         self._texts = []
         self._skip = False
         self._skip_tags = {"script", "style", "noscript"}
+
     def handle_starttag(self, tag, attrs):
         if tag.lower() in self._skip_tags:
             self._skip = True
         if tag.lower() in {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5"}:
             self._texts.append("\n")
+
     def handle_endtag(self, tag):
         if tag.lower() in self._skip_tags:
             self._skip = False
         if tag.lower() in {"p", "div", "li", "tr"}:
             self._texts.append("\n")
+
     def handle_data(self, data):
         if not self._skip:
             self._texts.append(data)
+
     def get_text(self):
         txt = "".join(self._texts)
         lines = [line.strip() for line in txt.splitlines()]
         return "\n".join([l for l in lines if l])
+
 
 def html_to_text(html_bytes: bytes) -> str:
     parser = _HTMLTextExtractor()
     parser.feed(try_decode(html_bytes))
     return parser.get_text()
 
-
-def docx_bytes_to_text(b: bytes) -> str:
-
-    try:
-        with zipfile.ZipFile(io := _BytesIOWrapper(b)) as z:
-            names = z.namelist()
-            if "word/document.xml" not in names:
-                raise RuntimeError("word/document.xml не найден в .docx")
-            xml = z.read("word/document.xml")
-    except zipfile.BadZipFile:
-        raise RuntimeError("Файл .docx повреждён или это не docx")
-    # парсим xml
-    root = ET.fromstring(xml)
-    ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
-    paragraphs = []
-    for p in root.findall('.//w:p', ns):
-        texts = [t.text for t in p.findall('.//w:t', ns) if t.text]
-        if texts:
-            paragraphs.append(''.join(texts))
-    return "\n".join(paragraphs)
-
-class _BytesIOWrapper:
-    def __init__(self, b: bytes):
-        from io import BytesIO
-        self._buf = BytesIO(b)
-    def read(self, *args, **kwargs):
-        return self._buf.read(*args, **kwargs)
-    def seek(self, *args, **kwargs):
-        return self._buf.seek(*args, **kwargs)
-    def tell(self, *args, **kwargs):
-        return self._buf.tell(*args, **kwargs)
-    def close(self):
-        return self._buf.close()
-
-def extract_text_from_bytes(data: bytes, name: str, max_chars: Optional[int] = None) -> str:
+def extract_text_from_bytes(
+    data: bytes, name: str, max_chars: Optional[int] = None
+) -> str:
     if not name:
         raise ValueError("Нужно указать имя файла (для определения расширения).")
     ext = os.path.splitext(name)[-1].lower().lstrip(".")
@@ -456,19 +462,23 @@ def extract_text_from_bytes(data: bytes, name: str, max_chars: Optional[int] = N
         raise ValueError(f"Формат .{ext} не поддерживается этим лёгким экстрактором.")
     return truncate(out, max_chars)
 
+
 def extract_text_from_path(path: str, max_chars: Optional[int] = None) -> str:
     with open(path, "rb") as f:
         data = f.read()
     name = os.path.basename(path)
     return extract_text_from_bytes(data, name=name, max_chars=max_chars)
 
+
 @app.get("/", include_in_schema=False)
 async def root():
     return JSONResponse({"status": "ok"})
 
+
 @app.get("/healthz", include_in_schema=False)
 async def healthz():
     return JSONResponse({"status": "healthy"})
+
 
 async def query_mistral(request: LLMRequest):
     url = "https://api.mistral.ai/v1/chat/completions"
@@ -477,12 +487,7 @@ async def query_mistral(request: LLMRequest):
         "model": request.model,
         "messages": [m.dict() for m in request.prompt],
     }
-    timeout = httpx.Timeout(
-        connect=10.0,  
-        read=120.0,   
-        write=60.0,
-        pool=10.0
-    )
+    timeout = httpx.Timeout(connect=10.0, read=120.0, write=60.0, pool=10.0)
     async with httpx.AsyncClient() as client:
         resp = await client.post(url, json=payload, headers=headers, timeout=timeout)
         if resp.status_code != 200:
@@ -501,9 +506,9 @@ async def query_cloudflare(request: LLMRequest):
         f"https://api.cloudflare.com/client/v4/accounts/"
         f"5054130e5a7ddf582ed30bdae4809a82/ai/run/@{request.model}"
     )
+    user_messages = [m.dict() for m in request.prompt]
     headers = {"Authorization": f"Bearer {CLOUDFLARE_API_KEY}"}
-    payload = {"prompt": request.prompt}
-
+    payload = {"prompt": user_messages[-1]["content"]}
     timeout = httpx.Timeout(
         connect=60.0,
         read=120.0,
@@ -525,9 +530,9 @@ async def query_cloudflare(request: LLMRequest):
             raise HTTPException(status_code=resp.status_code, detail=resp.text)
 
         raw_bytes = await resp.aread()
-
         encoded = base64.b64encode(raw_bytes).decode("ascii")
         return JSONResponse(content={"type": "image", "content": encoded})
+
 
 def add_prefix_if_first_is_system(full_messages: list, prefix: str) -> list:
     if not full_messages:
@@ -675,26 +680,48 @@ def parse_retry_seconds_from_headers(hdrs: Dict[str, str]) -> Optional[float]:
     return None
 
 
-async def _call_completion_with_flex(client, model: str, messages: List[Dict[str, str]]):
+async def _call_completion_with_flex(
+    client, model: str, messages: List[Dict[str, str]]
+):
     res = client.chat.completions.create(model=model, messages=messages)
     if asyncio.iscoroutine(res):
         return await res
     return await asyncio.to_thread(lambda: res)
 
+MAX_TOKENS = 5000         
+CHARS_PER_TOKEN = 4       
+think_balanced_re = re.compile(r"(?is)<think\b[^>]*>.*?</think\s*>")
+
+think_closing_re = re.compile(r"(?is)</think\s*>")
+
+think_opening_re = re.compile(r"(?is)<think\b[^>]*>")
+
+prefix_through_closing_re = re.compile(r"(?is).*?</think\s*>", flags=re.DOTALL)
+
+def estimate_tokens_from_text(s: str) -> int:
+    if not s:
+        return 0
+    return max(1, (len(s) + CHARS_PER_TOKEN - 1) // CHARS_PER_TOKEN)
+
+def clean_think_tags(content: str) -> str:
+    content = think_balanced_re.sub("", content)
+
+    while think_closing_re.search(content) and not think_opening_re.search(content):
+        content = prefix_through_closing_re.sub("", content, count=1)
+
+    return content
 
 async def providerRouting(request: LLMRequest):
     provider = providers[request.provider[0]]
     agent_use = 0
 
-    if request.provider[0] != "groq" and request.provider[0] != 'openrouter':
+    if request.provider[0] != "groq" and request.provider[0] != "openrouter":
         try:
             model = request.model.split("/", 1)[1]
         except Exception:
             model = request.model
     else:
         model = request.model
-
-    think_remove_re = re.compile(r"(?is)<think\b[^>]*>.*?</think\s*>")
 
     modified_prompt = []
     for item in request.prompt:
@@ -710,7 +737,7 @@ async def providerRouting(request: LLMRequest):
         if not isinstance(content, str):
             content = str(content)
 
-        new_content = think_remove_re.sub("", content).strip()
+        new_content = clean_think_tags(content).strip()
         new_content = re.sub(r"\n{3,}", "\n\n", new_content)
 
         if not role:
@@ -743,9 +770,10 @@ async def providerRouting(request: LLMRequest):
         "Если в сообщениях роли function/tool содержится результат внешнего поиска, считай эти данные актуальными..."
     )
     full_messages = add_prefix_if_first_is_system(full_messages, prefix)
-
+    selected_messages = full_messages[0]
+    selected_messages = [selected_messages,  *full_messages[-6:]]
     try:
-        safe_messages = sanitize_for_provider(full_messages)
+        safe_messages = sanitize_for_provider(selected_messages)
     except Exception as e:
         print("Sanitization error:", repr(e))
         return JSONResponse(
@@ -755,10 +783,16 @@ async def providerRouting(request: LLMRequest):
 
     api_keys = extract_api_keys_from_provider_conf(provider)
     if not api_keys:
-        return JSONResponse(status_code=500, content={"error": "no_api_keys", "detail": "no api keys found for provider"})
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "no_api_keys",
+                "detail": "no api keys found for provider",
+            },
+        )
 
-    max_rounds = 20  
-    per_key_backoff = 0.2  
+    max_rounds = 20
+    per_key_backoff = 0.2
     round_index = 0
     last_exception = None
 
@@ -768,10 +802,20 @@ async def providerRouting(request: LLMRequest):
         retry_seconds = None
 
         for idx, api_key in enumerate(api_keys):
-            logging.debug("Trying provider %s key %d/%d (round %d)", request.provider[0], idx + 1, len(api_keys), round_index)
-            openai_client = openai.OpenAI(base_url=provider["base_url"], api_key=api_key)
+            logging.debug(
+                "Trying provider %s key %d/%d (round %d)",
+                request.provider[0],
+                idx + 1,
+                len(api_keys),
+                round_index,
+            )
+            openai_client = openai.OpenAI(
+                base_url=provider["base_url"], api_key=api_key
+            )
             try:
-                completion = await _call_completion_with_flex(openai_client, model, safe_messages)
+                completion = await _call_completion_with_flex(
+                    openai_client, model, safe_messages
+                )
 
                 resp_text = (
                     completion.choices[0].message.content
@@ -784,13 +828,19 @@ async def providerRouting(request: LLMRequest):
                 )
 
             except Exception as e:
-                logging.exception("Provider call failed with key index %d: %s", idx, repr(e))
+                logging.exception(
+                    "Provider call failed with key index %d: %s", idx, repr(e)
+                )
                 last_exception = e
                 status = detect_status_from_exception(e)
                 headers = extract_headers_from_exception(e)
 
                 if status in (429, 402):
-                    logging.info("Detected status %s for key %d; rotating to next key", status, idx + 1)
+                    logging.info(
+                        "Detected status %s for key %d; rotating to next key",
+                        status,
+                        idx + 1,
+                    )
                     await asyncio.sleep(per_key_backoff)
                     continue
 
@@ -798,33 +848,52 @@ async def providerRouting(request: LLMRequest):
                 if parsed is not None:
                     saw_retry_header = True
                     retry_seconds = parsed
-                    logging.info("Detected retry header, will wait %.2fs before next round", retry_seconds)
+                    logging.info(
+                        "Detected retry header, will wait %.2fs before next round",
+                        retry_seconds,
+                    )
                     break
 
                 if status is not None and status >= 500:
-                    logging.info("Transient server error %s, try next key after short sleep", status)
+                    logging.info(
+                        "Transient server error %s, try next key after short sleep",
+                        status,
+                    )
                     await asyncio.sleep(per_key_backoff)
                     continue
 
                 logging.error("Unrecoverable provider error: %s", repr(e))
-                return JSONResponse(status_code=500, content={"error": "provider_error", "detail": str(e)})
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": "provider_error", "detail": str(e)},
+                )
 
         if saw_retry_header and retry_seconds is not None:
             wait_time = float(retry_seconds) + 0.5
             max_wait = 300.0
             if wait_time > max_wait:
                 wait_time = max_wait
-            logging.info("Waiting %.2fs due to rate-limit headers before retrying key pool", wait_time)
+            logging.info(
+                "Waiting %.2fs due to rate-limit headers before retrying key pool",
+                wait_time,
+            )
             await asyncio.sleep(wait_time)
             continue
         else:
             sleep_time = min(2 ** min(round_index, 6), 60)
-            logging.info("All keys exhausted (no retry header). Sleeping %.2fs before next round", sleep_time)
+            logging.info(
+                "All keys exhausted (no retry header). Sleeping %.2fs before next round",
+                sleep_time,
+            )
             await asyncio.sleep(sleep_time)
             continue
 
     logging.error("providerRouting: max_rounds reached, failing")
-    return JSONResponse(status_code=502, content={"error": "provider_unavailable", "detail": str(last_exception)})
+    return JSONResponse(
+        status_code=502,
+        content={"error": "provider_unavailable", "detail": str(last_exception)},
+    )
+
 
 def sanitize_for_provider(messages: List[Dict]) -> List[Dict]:
 
@@ -921,19 +990,19 @@ tools = [
     {
         "type": "function",
         "function": {
-          "name": "ocr_tool",
-          "description": "Распознаёт изображение Base64 и возвращает текст",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "imageBase64": {
-                "type": "string",
-                "description": "Base64-код изображения (data without data:image/... prefix)"
-              }
+            "name": "ocr_tool",
+            "description": "Распознаёт изображение Base64 и возвращает текст",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "imageBase64": {
+                        "type": "string",
+                        "description": "Base64-код изображения (data without data:image/... prefix)",
+                    }
+                },
+                "required": ["imageBase64"],
             },
-            "required": ["imageBase64"]
-          }
-        }
+        },
     },
     {
         "type": "function",
@@ -967,7 +1036,7 @@ tools = [
             },
         },
     },
-        {
+    {
         "type": "function",
         "function": {
             "name": "python_code_execution",
@@ -1095,6 +1164,7 @@ async def python_code_execution(code: str):
         ],
     )
     return response.choices[0].message.content
+
 
 async def science_search(query: str):
     url = f"https://api.wolframalpha.com/v2/query?appid=TV3TVAVWAR&input={query}&output=JSON"

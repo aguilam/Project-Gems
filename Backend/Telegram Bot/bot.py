@@ -270,12 +270,97 @@ async def edit_chat(chat_id: str, new_title: str) -> dict | None:
     logging.error("edit_chat failed after retries: %s", url)
     return None
 
+PROVIDER_TOKEN = ""
+CURRENCY = "XTR"
+PRICE_MAIN_UNITS = 1
+
+
+def offer_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Перейти к оплате", callback_data="buy_premium")
+    return kb.as_markup()
+
+
+def invoice_keyboard():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Оплатить 1 ⭐️", pay=True)
+    return kb.as_markup()
+
+
+@dp.callback_query(lambda c: c.data == "buy_premium")
+async def callback_buy_premium(callback: CallbackQuery):
+    if callback.data != "buy_premium":
+        return
+
+    await callback.answer()
+
+    try:
+        await callback.message.edit_text(
+            callback.message.text + "\n\nПереходим к оплате…"
+        )
+    except Exception:
+        pass
+
+    order_payload = str(uuid.uuid4())
+
+    amount_smallest = int(PRICE_MAIN_UNITS)
+    prices = [LabeledPrice(label="Pro подписка", amount=amount_smallest)]
+
+    short_description = "Pro подписка — 1000 обычных + 120 премиум вопросов и много много чего ещё."
+
+    await bot.send_invoice(
+        chat_id=callback.from_user.id,
+        title="Pro подписка",
+        description=short_description,
+        payload=order_payload,
+        provider_token="",
+        currency=CURRENCY,
+        prices=prices,
+        reply_markup=invoice_keyboard(),
+    )
+
+
+@dp.pre_checkout_query()
+async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery):
+    await pre_checkout_query.answer(ok=True)
+
+
+@dp.message(F.successful_payment)
+async def success_payment_handler(message: types.message):
+    payment = message.successful_payment
+    order_payload = payment.invoice_payload
+
+    user = await fetch_user(message.from_user.id)
+    payment_info = {
+        "userId": user.get("id", ""),
+        "telegramPaymentId": payment.telegram_payment_charge_id,
+        "providerPaymentId": payment.provider_payment_charge_id,
+        "orderPayload": order_payload,
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{API_URL}/subscriptions", json=payment_info
+            ) as resp:
+                resp.raise_for_status()
+        await message.answer(
+            "🥳 Спасибо! Подписка оформлена — вы получили доступ к Pro."
+        )
+    except Exception as e:
+        safe_error = str(e).replace("=", "\\=").replace("_", "\\_")
+        await message.answer(
+            text=f"❗ Проблема при записи подписки: `{safe_error}`",
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
+
 @dp.message(Command(commands=["pro", "premium"]))
 async def send_offer(message: types.message):
     text = (
         "✨ Pro подписка — что вы получите:\n\n"
         "• 1000 обычных и 120 премиум вопросов\n"
         "• Доступ к премиум-моделям генерации текста и изображений\n"
+        "• Повышение скорости ответа моделей Llama в 3 раза\n"
         "• Распознавание голосовых сообщений других пользователей\n"
         "• Шорткаты для быстрого доступа\n"
         "• Агентские функции (поиск, улучшенная память, запуск Python, модуль WolframAlpha)\n"
@@ -283,7 +368,7 @@ async def send_offer(message: types.message):
         "Нажмите «Оплатить», чтобы оформить подписку."
     )
     await message.answer(text=text, reply_markup=offer_keyboard())
-    
+
 async def show_chats_menu(target, state: FSMContext, mode: str = None):
     data = await state.get_data()
     active_chat = data.get("active_chat")
@@ -538,6 +623,8 @@ def build_keyboard(
             icons = f"🧠{icons}"
         if "image" in m["tags"]:
             icons =  f"🖼️{icons}"
+        if m["premium"] == True:
+            icons = f"⭐ {icons}"
         label = f"{icons} {model_name}"
         buttons.append(InlineKeyboardButton(text=label, callback_data=callback_data))
 
@@ -915,6 +1002,7 @@ async def on_models_toggle(callback: CallbackQuery):
             for m in models
         ]
         new_text = f"ℹ️ *Список всех моделей:*\n\n" + "\n".join(info_lines)
+        new_text = f"{new_text} \n\n ✅ - выбранная вами модель \n 🧠 - модель обладающая возможностью рассуждения \n 🖼️ - модель вместо текстового ответа создёт картинки \n ⭐ - премиум модель"
         kb_new = toggle_button(kb_old, show=True)
     else:
         new_text = ORIGINAL_TEXT
@@ -930,7 +1018,7 @@ async def patch_user_info(dto: dict) -> dict:
     async with aiohttp.ClientSession() as session:
         async with session.patch(f"{API_URL}/user", json=dto) as resp:
             resp.raise_for_status()
-            return await resp.json()
+            return await resp.json()    
 
 
 async def show_roles_menu(target, state: FSMContext):
@@ -1028,7 +1116,7 @@ forbidden_commands = {
 @dp.message()
 async def message_router(message: types.Message, state: FSMContext):
     txt = (message.text or message.caption or "").strip()
-    if message.text == None:
+    if message.text is None and message.caption is None and message.voice is None:
         return
     if any(txt.startswith(cmd) for cmd in forbidden_commands):
         return 
@@ -1046,7 +1134,7 @@ async def message_router(message: types.Message, state: FSMContext):
         "Нейросеть думает🤔", parse_mode=ParseMode.MARKDOWN_V2
     )
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
-    chat_id = data.get("active_chat")
+    chat_id = data.get("active_chat", "0")
 
     if message.text is not None and message.text not in forbidden_commands:
         if mode == "edit" and edit_target:
@@ -1122,6 +1210,7 @@ async def message_router(message: types.Message, state: FSMContext):
             if isinstance(form_data, aiohttp.FormData):
                 async with session.post(f"{API_URL}/messages", data=form_data) as resp:
                     text = await resp.text()
+                    
                     if resp.status >= 400:
                         try:
                             err = await resp.json()
@@ -1514,90 +1603,6 @@ def make_final_text_by_truncating_hidden(think_text: str, max_len: int = 4096) -
     raise ValueError("Hidden payload too large even after truncation.")
 
 
-PROVIDER_TOKEN = ""
-CURRENCY = "XTR"
-PRICE_MAIN_UNITS = 1
-
-
-def offer_keyboard():
-    kb = InlineKeyboardBuilder()
-    kb.button(text="Перейти к оплате", callback_data="buy_premium")
-    return kb.as_markup()
-
-
-def invoice_keyboard():
-    kb = InlineKeyboardBuilder()
-    kb.button(text="Оплатить 1 ⭐️", pay=True)
-    return kb.as_markup()
-
-
-@dp.callback_query()
-async def callback_buy_premium(callback: CallbackQuery):
-    if callback.data != "buy_premium":
-        return
-
-    await callback.answer()
-
-    try:
-        await callback.message.edit_text(
-            callback.message.text + "\n\nПереходим к оплате…"
-        )
-    except Exception:
-        pass
-
-    order_payload = str(uuid.uuid4())
-
-    amount_smallest = int(PRICE_MAIN_UNITS)
-    prices = [LabeledPrice(label="Pro подписка", amount=amount_smallest)]
-
-    short_description = "Pro подписка — 1000 обычных + 120 премиум вопросов."
-
-    await bot.send_invoice(
-        chat_id=callback.from_user.id,
-        title="Оформить Pro подписку",
-        description=short_description,
-        payload=order_payload,
-        provider_token="",
-        currency=CURRENCY,
-        prices=prices,
-        reply_markup=invoice_keyboard(),
-    )
-
-
-@dp.pre_checkout_query()
-async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery):
-
-    await pre_checkout_query.answer(ok=True)
-
-
-@dp.message(F.successful_payment)
-async def success_payment_handler(message: types.message):
-    payment = message.successful_payment
-    order_payload = payment.invoice_payload
-
-    user = await fetch_user(message.from_user.id)
-    payment_info = {
-        "userId": user.get("id", ""),
-        "telegramPaymentId": payment.telegram_payment_charge_id,
-        "providerPaymentId": payment.provider_payment_charge_id,
-        "orderPayload": order_payload,
-    }
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{API_URL}/subscriptions", json=payment_info
-            ) as resp:
-                resp.raise_for_status()
-        await message.answer(
-            "🥳 Спасибо! Подписка оформлена — вы получили доступ к Pro."
-        )
-    except Exception as e:
-        safe_error = str(e).replace("=", "\\=").replace("_", "\\_")
-        await message.answer(
-            text=f"❗ Проблема при записи подписки: `{safe_error}`",
-            parse_mode=ParseMode.MARKDOWN_V2,
-        )
 import socket
 
 async def _wait_port_up(port: int, timeout: float = 10.0) -> bool:
