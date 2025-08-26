@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
-
+import { PostHog } from 'posthog-node';
 @Injectable()
 export class SubscriptionsService {
   constructor(private prisma: PrismaService) {}
@@ -10,6 +10,10 @@ export class SubscriptionsService {
     telegramPaymentId: string;
     providerPaymentId: string;
   }) {
+    const client = new PostHog(
+      'phc_7dIIXaRO6KyWSjenkV1cJ2xfvDjxgybB0cpLXxna78S',
+      { host: 'https://eu.i.posthog.com' },
+    );
     const validUntil = new Date();
     validUntil.setMonth(validUntil.getMonth() + 1);
     await this.prisma.subscription.upsert({
@@ -26,6 +30,18 @@ export class SubscriptionsService {
         validUntil: validUntil,
       },
     });
+
+    client.capture({
+      distinctId: dto.userId,
+      event: 'Purchase Succeeded',
+      properties: {
+        value: 340,
+        currency: 'RUB',
+      },
+    });
+
+    await client.shutdown();
+
     await this.prisma.user.update({
       where: {
         id: dto.userId,

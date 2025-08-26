@@ -12,7 +12,6 @@ import { ChatsService } from 'src/chats/chats.service';
 import { FileRecognizeService } from 'src/fileUpload/fileRecognize.service';
 import { OcrService } from 'src/ocr/ocr.service';
 import { ConfigService } from '@nestjs/config';
-
 export interface FileDTO {
   buffer: string;
   name: string;
@@ -22,8 +21,11 @@ export interface FileDTO {
 export interface ResponseDTO {
   content: string;
   type: string;
+  usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+  };
 }
-
 export class MessageDTO {
   telegramId: string;
   prompt: string;
@@ -237,17 +239,85 @@ export class MessagesService {
           questionsCost++;
         }
       }
-      const responseData: ResponseDTO = response.data;
-      if (responseData.type != 'image') {
-        await this.prisma.message.create({
-          data: {
-            chatId: chat.id,
-            senderId: user.id,
-            role: 'assistant',
-            content: responseData.content,
-            replyToId: userMessage.id,
+      const responseData = response?.data as ResponseDTO | undefined;
+
+      if (!responseData || typeof responseData.content !== 'string') {
+        console.error('LLM returned invalid body', response?.data);
+        throw new InternalServerErrorException('LLM вернул некорректный ответ');
+      }
+
+      const usage = {
+        prompt_tokens: Number(responseData.usage?.prompt_tokens ?? 0),
+        completion_tokens: Number(
+          responseData.usage?.completion_tokens ??
+            responseData.usage?.completion_tokens ??
+            0,
+        ),
+      };
+
+      try {
+        if (responseData.type !== 'image') {
+          await this.prisma.message.create({
+            data: {
+              chatId: chat.id,
+              senderId: user.id,
+              role: 'assistant',
+              content: responseData.content,
+              replyToId: userMessage.id,
+            },
+          });
+        }
+      } catch (e) {
+        console.error('Prisma create message failed', e);
+        throw new InternalServerErrorException('Ошибка сохранения сообщения');
+      }
+
+      try {
+        await axios.post(
+          'https://eu.i.posthog.com/i/v0/e/',
+          {
+            api_key: 'phc_7dIIXaRO6KyWSjenkV1cJ2xfvDjxgybB0cpLXxna78S',
+            event: '$ai_generation',
+            properties: {
+              distinct_id: String(user.id),
+              $ai_trace_id: chat.id,
+              $ai_model: model.systemName,
+              $ai_provider: 'openai',
+              $ai_input_tokens: usage.prompt_tokens,
+              $ai_output_tokens: usage.completion_tokens,
+              $ai_input: [
+                {
+                  role: 'user',
+                  content: [
+                    {
+                      type: 'text',
+                      text: fullPrompt,
+                    },
+                  ],
+                },
+              ],
+              $ai_output_choices: [
+                {
+                  role: 'assistant',
+                  content: [
+                    {
+                      type: 'text',
+                      text: responseData.content,
+                    },
+                  ],
+                },
+              ],
+            },
+            timestamp: new Date().toISOString(),
           },
-        });
+          { headers: { 'Content-Type': 'application/json' }, timeout: 5000 },
+        );
+      } catch (e) {
+        console.error(
+          'PostHog ingestion failed, continuing without analytics:',
+          e?.response?.status,
+          e?.response?.data ?? e.message,
+        );
       }
       if (model.premium) {
         await this.prisma.user.update({

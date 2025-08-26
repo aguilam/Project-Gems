@@ -30,6 +30,7 @@ from email.utils import parsedate_to_datetime
 import logging
 from typing import Any, Dict, List, Optional, Literal
 import asyncio
+
 try:
     from docx import Document
 except Exception as e:
@@ -195,6 +196,7 @@ def html_to_text(html_bytes: bytes) -> str:
     parser = _HTMLTextExtractor()
     parser.feed(try_decode(html_bytes))
     return parser.get_text()
+
 
 def docx_bytes_to_text(b: bytes) -> str:
 
@@ -439,6 +441,7 @@ def html_to_text(html_bytes: bytes) -> str:
     parser.feed(try_decode(html_bytes))
     return parser.get_text()
 
+
 def extract_text_from_bytes(
     data: bytes, name: str, max_chars: Optional[int] = None
 ) -> str:
@@ -522,20 +525,19 @@ async def query_cloudflare(request: LLMRequest):
         if resp.status_code != 200:
             raise HTTPException(status_code=resp.status_code, detail=resp.text)
 
-        # Попробуем получить base64 из JSON result.image (или похожих полей)
         ct = resp.headers.get("content-type", "")
         if "application/json" in ct or resp.text.strip().startswith(("{", "[")):
             try:
                 data = resp.json()
-                # ищем в result / image / images
                 candidate = None
                 if isinstance(data, dict):
                     result = data.get("result", data)
                     for key in ("image", "images", "artifact", "artifacts"):
-                        candidate = result.get(key) if isinstance(result, dict) else None
+                        candidate = (
+                            result.get(key) if isinstance(result, dict) else None
+                        )
                         if candidate:
                             break
-                # нормализуем
                 if isinstance(candidate, list) and candidate:
                     candidate = candidate[0]
                 if isinstance(candidate, dict):
@@ -544,22 +546,27 @@ async def query_cloudflare(request: LLMRequest):
                             candidate = candidate[k]
                             break
                 if isinstance(candidate, str):
-                    b64 = candidate.split("base64,", 1)[-1] if candidate.startswith("data:") and "base64," in candidate else candidate
-                    # проверим валидность base64 простым декодом
+                    b64 = (
+                        candidate.split("base64,", 1)[-1]
+                        if candidate.startswith("data:") and "base64," in candidate
+                        else candidate
+                    )
                     try:
                         base64.b64decode(b64, validate=True)
                         return JSONResponse(content={"type": "image", "content": b64})
                     except Exception:
-                        # если это URL — вернуть как url, иначе вернуть json
                         if b64.startswith("http://") or b64.startswith("https://"):
-                            return JSONResponse(content={"type": "image_url", "content": b64})
+                            return JSONResponse(
+                                content={"type": "image_url", "content": b64}
+                            )
                         return JSONResponse(content={"type": "json", "content": data})
             except Exception:
                 pass
 
-        # fallback: читаем сырые байты и возвращаем base64
         raw = await resp.aread()
-        return JSONResponse(content={"type": "image", "content": base64.b64encode(raw).decode("ascii")})
+        return JSONResponse(
+            content={"type": "image", "content": base64.b64encode(raw).decode("ascii")}
+        )
 
 
 def add_prefix_if_first_is_system(full_messages: list, prefix: str) -> list:
@@ -716,8 +723,9 @@ async def _call_completion_with_flex(
         return await res
     return await asyncio.to_thread(lambda: res)
 
-MAX_TOKENS = 5000         
-CHARS_PER_TOKEN = 4       
+
+MAX_TOKENS = 5000
+CHARS_PER_TOKEN = 4
 think_balanced_re = re.compile(r"(?is)<think\b[^>]*>.*?</think\s*>")
 
 think_closing_re = re.compile(r"(?is)</think\s*>")
@@ -726,10 +734,12 @@ think_opening_re = re.compile(r"(?is)<think\b[^>]*>")
 
 prefix_through_closing_re = re.compile(r"(?is).*?</think\s*>", flags=re.DOTALL)
 
+
 def estimate_tokens_from_text(s: str) -> int:
     if not s:
         return 0
     return max(1, (len(s) + CHARS_PER_TOKEN - 1) // CHARS_PER_TOKEN)
+
 
 def clean_think_tags(content: str) -> str:
     content = think_balanced_re.sub("", content)
@@ -738,6 +748,7 @@ def clean_think_tags(content: str) -> str:
         content = prefix_through_closing_re.sub("", content, count=1)
 
     return content
+
 
 async def providerRouting(request: LLMRequest):
     provider = providers[request.provider[0]]
@@ -799,7 +810,7 @@ async def providerRouting(request: LLMRequest):
     )
     full_messages = add_prefix_if_first_is_system(full_messages, prefix)
     selected_messages = full_messages[0]
-    selected_messages = [selected_messages,  *full_messages[-6:]]
+    selected_messages = [selected_messages, *full_messages[-6:]]
     try:
         safe_messages = sanitize_for_provider(selected_messages)
     except Exception as e:
@@ -851,7 +862,14 @@ async def providerRouting(request: LLMRequest):
                     else ""
                 )
                 return JSONResponse(
-                    content={"type": "text", "content": resp_text},
+                    content={
+                        "type": "text",
+                        "content": resp_text,
+                        "usage": {
+                            "prompt_tokens": completion.usage.prompt_tokens,
+                            "completion_tokens": completion.usage.completion_tokens,
+                        },
+                    },
                     headers={"Agent-Use": f"{agent_use}"},
                 )
 
