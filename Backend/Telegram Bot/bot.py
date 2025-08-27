@@ -37,17 +37,21 @@ import logging
 from typing import Optional, Any
 
 import logging
+
 logging.basicConfig(level=logging.DEBUG)
 
 _RETRIES = 3
 _BACKOFF_BASE = 0.5
 _TIMEOUT_SECONDS = 15
 
+
 async def handle_root(request):
     return web.json_response({"status": "ok"})
 
+
 async def handle_healthz(request):
     return web.json_response({"status": "healthy"})
+
 
 async def _start_health_server(port: int) -> web.AppRunner:
     app = web.Application()
@@ -58,11 +62,13 @@ async def _start_health_server(port: int) -> web.AppRunner:
     await site.start()
     return runner
 
+
 async def _shutdown_health_server(runner: web.AppRunner):
     try:
         await runner.cleanup()
     except Exception:
         pass
+
 
 load_dotenv()
 router = Router()
@@ -170,12 +176,17 @@ async def cmd_start(message: types.Message):
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(f"{API_URL}/user", json=data) as resp:
-                await message.answer("Привет! Вот основные команды: \n\n /profile - узнать информацию о профиле и количестве оставшихся вопросов \n /models - выбрать другую ИИ-модель \n /role - поменять роль(системный промпт) для ИИ \n /chats - поменять текущий чат или создать новый \n /shortcuts - создать новый шорткат или поменять текущий \n /support - сообщить о проблеме, ошибке или предложении \n /pro - не хватает текущих возможностей и моделей? Попробуйте pro подписку \n\n <b>Что-бы начать общение просто напишите свой запрос!</b>", parse_mode=ParseMode.HTML)
+                await message.answer(
+                    "Привет! Вот основные команды: \n\n /profile - узнать информацию о профиле и количестве оставшихся вопросов \n /models - выбрать другую ИИ-модель \n /role - поменять роль(системный промпт) для ИИ \n /chats - поменять текущий чат или создать новый \n /shortcuts - создать новый шорткат или поменять текущий \n /support - сообщить о проблеме, ошибке или предложении \n /pro - не хватает текущих возможностей и моделей? Попробуйте pro подписку \n\n <b>Что-бы начать общение просто напишите свой запрос!</b>",
+                    parse_mode=ParseMode.HTML,
+                )
                 resp.raise_for_status()
-                user_info = await resp.json()
+                response = await resp.json()
                 chat_id = message.chat.id
-                user_model = user_info["defaultModel"]
-                model_name = user_model['name']
+                user = response["user"]
+                user_model = user["defaultModel"]
+                model_name = user_model["name"]
+                user_existing = response["existing"]
                 message_to_pin = await message.bot.send_message(
                     chat_id=chat_id, text=f"📝{model_name}"
                 )
@@ -184,11 +195,63 @@ async def cmd_start(message: types.Message):
                     message_id=message_to_pin.message_id,
                     disable_notification=True,
                 )
+                print(user_existing)
+                if user_existing == False:
+                    await message.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"Как новому пользователю мы предлагаем вам 14 дневный пробный  pro период.",
+                        reply_markup=trial_invoice_keyboard(),
+                    )
                 return
 
     except aiohttp.ClientError as e:
         await message.answer(f"Ошибка подключения к серверу: {e}")
         return
+
+
+def trial_invoice_keyboard():
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text="Активировать пробную подписку", callback_data="activate_trial"
+            )
+        ]
+    ]
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    return kb
+
+
+@dp.message(Command(commands=["trial"]))
+async def cmd_trial(msg: types.message):
+    await msg.answer(
+        "Нажми кнопку, чтобы активировать пробную подписку:",
+        reply_markup=trial_invoice_keyboard(),
+    )
+
+
+@dp.callback_query(lambda c: c.data == "activate_trial")
+async def on_activate_trial(query: CallbackQuery):
+    await query.answer(text="Активирую...", show_alert=False)
+    print(query)
+    await success_trial_handler(query.from_user.id, query.message.chat.id)
+
+async def success_trial_handler(user_telegram_id: int, chat_id: int):
+    user = await fetch_user(user_telegram_id)
+    backend_user_id = (user or {}).get("id")
+    if not backend_user_id:
+        await bot.send_message(chat_id=chat_id, text="❗ Не удалось определить пользователя. Нажмите /start и попробуйте снова.")
+        return
+    payment_info = {"userId": backend_user_id}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{API_URL}/subscriptions/trial", json=payment_info
+            ) as resp:
+                resp.raise_for_status()
+        await bot.send_message(chat_id=chat_id, text="🥳 Спасибо! Подписка оформлена — вы получили доступ к Pro.")
+    except Exception as e:
+        safe_error = str(e).replace("=", "\\=").replace("_", "\\_")
+        await bot.send_message(chat_id=chat_id, text=f"❗ Проблема при записи подписки: `{safe_error}`", parse_mode=ParseMode.MARKDOWN_V2)
 
 
 async def fetch_chats(telegram_id: int) -> list:
@@ -202,13 +265,20 @@ async def fetch_chats(telegram_id: int) -> list:
                     resp.raise_for_status()
                     return await resp.json()
             except aiohttp.ClientResponseError as e:
-                logging.warning("fetch_chats HTTP error %s (attempt %d): %s", url, attempt, getattr(e, "status", e))
+                logging.warning(
+                    "fetch_chats HTTP error %s (attempt %d): %s",
+                    url,
+                    attempt,
+                    getattr(e, "status", e),
+                )
                 if 500 <= getattr(e, "status", 500) < 600:
                     await asyncio.sleep(_BACKOFF_BASE * attempt)
                     continue
                 return []
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logging.warning("fetch_chats network/timeout %s (attempt %d): %s", url, attempt, e)
+                logging.warning(
+                    "fetch_chats network/timeout %s (attempt %d): %s", url, attempt, e
+                )
                 await asyncio.sleep(_BACKOFF_BASE * attempt)
                 continue
     logging.error("fetch_chats failed after retries: %s", url)
@@ -230,13 +300,20 @@ async def delete_chat(chat_id: str) -> dict | None:
                     except Exception:
                         return {}
             except aiohttp.ClientResponseError as e:
-                logging.warning("delete_chat HTTP error %s (attempt %d): %s", url, attempt, getattr(e, "status", e))
+                logging.warning(
+                    "delete_chat HTTP error %s (attempt %d): %s",
+                    url,
+                    attempt,
+                    getattr(e, "status", e),
+                )
                 if 500 <= getattr(e, "status", 500) < 600:
                     await asyncio.sleep(_BACKOFF_BASE * attempt)
                     continue
                 return None
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logging.warning("delete_chat network/timeout %s (attempt %d): %s", url, attempt, e)
+                logging.warning(
+                    "delete_chat network/timeout %s (attempt %d): %s", url, attempt, e
+                )
                 await asyncio.sleep(_BACKOFF_BASE * attempt)
                 continue
     logging.error("delete_chat failed after retries: %s", url)
@@ -258,17 +335,25 @@ async def edit_chat(chat_id: str, new_title: str) -> dict | None:
                     except Exception:
                         return {}
             except aiohttp.ClientResponseError as e:
-                logging.warning("edit_chat HTTP error %s (attempt %d): %s", url, attempt, getattr(e, "status", e))
+                logging.warning(
+                    "edit_chat HTTP error %s (attempt %d): %s",
+                    url,
+                    attempt,
+                    getattr(e, "status", e),
+                )
                 if 500 <= getattr(e, "status", 500) < 600:
                     await asyncio.sleep(_BACKOFF_BASE * attempt)
                     continue
                 return None
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logging.warning("edit_chat network/timeout %s (attempt %d): %s", url, attempt, e)
+                logging.warning(
+                    "edit_chat network/timeout %s (attempt %d): %s", url, attempt, e
+                )
                 await asyncio.sleep(_BACKOFF_BASE * attempt)
                 continue
     logging.error("edit_chat failed after retries: %s", url)
     return None
+
 
 PROVIDER_TOKEN = ""
 CURRENCY = "XTR"
@@ -306,7 +391,9 @@ async def callback_buy_premium(callback: CallbackQuery):
     amount_smallest = int(PRICE_MAIN_UNITS)
     prices = [LabeledPrice(label="Pro подписка", amount=amount_smallest)]
 
-    short_description = "Pro подписка — 1000 обычных + 120 премиум вопросов и много много чего ещё."
+    short_description = (
+        "Pro подписка — 1000 обычных + 120 премиум вопросов и много много чего ещё."
+    )
 
     await bot.send_invoice(
         chat_id=callback.from_user.id,
@@ -354,6 +441,7 @@ async def success_payment_handler(message: types.message):
             parse_mode=ParseMode.MARKDOWN_V2,
         )
 
+
 @dp.message(Command(commands=["pro", "premium"]))
 async def send_offer(message: types.message):
     text = (
@@ -368,6 +456,7 @@ async def send_offer(message: types.message):
         "Нажмите «Оплатить», чтобы оформить подписку."
     )
     await message.answer(text=text, reply_markup=offer_keyboard())
+
 
 async def show_chats_menu(target, state: FSMContext, mode: str = None):
     data = await state.get_data()
@@ -527,13 +616,20 @@ async def fetch_models() -> list:
                     resp.raise_for_status()
                     return await resp.json()
             except aiohttp.ClientResponseError as e:
-                logging.warning("fetch_models HTTP error %s (attempt %d): %s", url, attempt, getattr(e, "status", e))
+                logging.warning(
+                    "fetch_models HTTP error %s (attempt %d): %s",
+                    url,
+                    attempt,
+                    getattr(e, "status", e),
+                )
                 if 500 <= getattr(e, "status", 500) < 600:
                     await asyncio.sleep(_BACKOFF_BASE * attempt)
                     continue
                 return []
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logging.warning("fetch_models network/timeout %s (attempt %d): %s", url, attempt, e)
+                logging.warning(
+                    "fetch_models network/timeout %s (attempt %d): %s", url, attempt, e
+                )
                 await asyncio.sleep(_BACKOFF_BASE * attempt)
                 continue
     logging.error("fetch_models failed after retries: %s", url)
@@ -552,13 +648,20 @@ async def fetch_user(telegram_id: int) -> dict | None:
                     resp.raise_for_status()
                     return await resp.json()
             except aiohttp.ClientResponseError as e:
-                logging.warning("fetch_user HTTP error %s (attempt %d): %s", url, attempt, getattr(e, "status", e))
+                logging.warning(
+                    "fetch_user HTTP error %s (attempt %d): %s",
+                    url,
+                    attempt,
+                    getattr(e, "status", e),
+                )
                 if 500 <= getattr(e, "status", 500) < 600:
                     await asyncio.sleep(_BACKOFF_BASE * attempt)
                     continue
                 return None
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logging.warning("fetch_user network/timeout %s (attempt %d): %s", url, attempt, e)
+                logging.warning(
+                    "fetch_user network/timeout %s (attempt %d): %s", url, attempt, e
+                )
                 await asyncio.sleep(_BACKOFF_BASE * attempt)
                 continue
     logging.error("fetch_user failed after retries: %s", url)
@@ -581,13 +684,23 @@ async def patch_user_model(telegram_id: int, model_id: str) -> Optional[dict]:
                         return {}
             except aiohttp.ClientResponseError as e:
                 status = getattr(e, "status", None)
-                logging.warning("patch_user_model HTTP error %s (attempt %d): %s", url, attempt, status)
+                logging.warning(
+                    "patch_user_model HTTP error %s (attempt %d): %s",
+                    url,
+                    attempt,
+                    status,
+                )
                 if status and 500 <= status < 600:
                     await asyncio.sleep(_BACKOFF_BASE * attempt)
                     continue
                 return None
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logging.warning("patch_user_model network/timeout %s (attempt %d): %s", url, attempt, e)
+                logging.warning(
+                    "patch_user_model network/timeout %s (attempt %d): %s",
+                    url,
+                    attempt,
+                    e,
+                )
                 await asyncio.sleep(_BACKOFF_BASE * attempt)
                 continue
     logging.error("patch_user_model failed after retries: %s", url)
@@ -595,14 +708,11 @@ async def patch_user_model(telegram_id: int, model_id: str) -> Optional[dict]:
 
 
 def is_user_premium(user: dict) -> bool:
-    subscription = user.get("subscription")
-    if not subscription:
+    subscriptions = user.get("subscription", [])
+    if not subscriptions:
         return False
-    status = subscription.get("status")
-    if status != "ACTIVE":
-        return False
-    else:
-        return True
+    active_subscription = next((sub for sub in subscriptions if sub.get("status") == "ACTIVE"), None)
+    return active_subscription is not None
 
 
 def build_keyboard(
@@ -611,7 +721,7 @@ def build_keyboard(
     buttons: list[InlineKeyboardButton] = []
     for m in models:
         model_name = m["name"]
-        icons = ''
+        icons = ""
         callback_data = f"model_select:{m['id']}"
         if m.get("premium", False) and not user_premium:
             icons = f"🔒{icons}"
@@ -622,7 +732,7 @@ def build_keyboard(
         if "reasoning" in m["tags"]:
             icons = f"🧠{icons}"
         if "image" in m["tags"]:
-            icons =  f"🖼️{icons}"
+            icons = f"🖼️{icons}"
         if m["premium"] == True:
             icons = f"⭐ {icons}"
         label = f"{icons} {model_name}"
@@ -666,13 +776,23 @@ async def fetch_user_shortcuts(telegram_id: int) -> list:
                         return []
             except aiohttp.ClientResponseError as e:
                 status = getattr(e, "status", None)
-                logging.warning("fetch_user_shortcuts HTTP error %s (attempt %d): %s", url, attempt, status)
+                logging.warning(
+                    "fetch_user_shortcuts HTTP error %s (attempt %d): %s",
+                    url,
+                    attempt,
+                    status,
+                )
                 if status and 500 <= status < 600:
                     await asyncio.sleep(_BACKOFF_BASE * attempt)
                     continue
                 return []
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logging.warning("fetch_user_shortcuts network/timeout %s (attempt %d): %s", url, attempt, e)
+                logging.warning(
+                    "fetch_user_shortcuts network/timeout %s (attempt %d): %s",
+                    url,
+                    attempt,
+                    e,
+                )
                 await asyncio.sleep(_BACKOFF_BASE * attempt)
                 continue
     logging.error("fetch_user_shortcuts failed after retries: %s", url)
@@ -695,13 +815,17 @@ async def add_shortcuts(data: dict) -> Optional[dict]:
                         return {}
             except aiohttp.ClientResponseError as e:
                 status = getattr(e, "status", None)
-                logging.warning("add_shortcuts HTTP error %s (attempt %d): %s", url, attempt, status)
+                logging.warning(
+                    "add_shortcuts HTTP error %s (attempt %d): %s", url, attempt, status
+                )
                 if status and 500 <= status < 600:
                     await asyncio.sleep(_BACKOFF_BASE * attempt)
                     continue
                 return None
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logging.warning("add_shortcuts network/timeout %s (attempt %d): %s", url, attempt, e)
+                logging.warning(
+                    "add_shortcuts network/timeout %s (attempt %d): %s", url, attempt, e
+                )
                 await asyncio.sleep(_BACKOFF_BASE * attempt)
                 continue
     logging.error("add_shortcuts failed after retries: %s", url)
@@ -723,13 +847,23 @@ async def delete_shortcuts(id: int) -> Optional[dict]:
                         return {}
             except aiohttp.ClientResponseError as e:
                 status = getattr(e, "status", None)
-                logging.warning("delete_shortcuts HTTP error %s (attempt %d): %s", url, attempt, status)
+                logging.warning(
+                    "delete_shortcuts HTTP error %s (attempt %d): %s",
+                    url,
+                    attempt,
+                    status,
+                )
                 if status and 500 <= status < 600:
                     await asyncio.sleep(_BACKOFF_BASE * attempt)
                     continue
                 return None
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logging.warning("delete_shortcuts network/timeout %s (attempt %d): %s", url, attempt, e)
+                logging.warning(
+                    "delete_shortcuts network/timeout %s (attempt %d): %s",
+                    url,
+                    attempt,
+                    e,
+                )
                 await asyncio.sleep(_BACKOFF_BASE * attempt)
                 continue
     logging.error("delete_shortcuts failed after retries: %s", url)
@@ -752,13 +886,23 @@ async def patch_shortcuts(id: int, payload: dict | None = None) -> Optional[dict
                         return {}
             except aiohttp.ClientResponseError as e:
                 status = getattr(e, "status", None)
-                logging.warning("patch_shortcuts HTTP error %s (attempt %d): %s", url, attempt, status)
+                logging.warning(
+                    "patch_shortcuts HTTP error %s (attempt %d): %s",
+                    url,
+                    attempt,
+                    status,
+                )
                 if status and 500 <= status < 600:
                     await asyncio.sleep(_BACKOFF_BASE * attempt)
                     continue
                 return None
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logging.warning("patch_shortcuts network/timeout %s (attempt %d): %s", url, attempt, e)
+                logging.warning(
+                    "patch_shortcuts network/timeout %s (attempt %d): %s",
+                    url,
+                    attempt,
+                    e,
+                )
                 await asyncio.sleep(_BACKOFF_BASE * attempt)
                 continue
     logging.error("patch_shortcuts failed after retries: %s", url)
@@ -817,13 +961,23 @@ async def fetch_shortcut(id: int) -> Optional[dict]:
                         return {}
             except aiohttp.ClientResponseError as e:
                 status = getattr(e, "status", None)
-                logging.warning("fetch_shortcut HTTP error %s (attempt %d): %s", url, attempt, status)
+                logging.warning(
+                    "fetch_shortcut HTTP error %s (attempt %d): %s",
+                    url,
+                    attempt,
+                    status,
+                )
                 if status and 500 <= status < 600:
                     await asyncio.sleep(_BACKOFF_BASE * attempt)
                     continue
                 return None
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logging.warning("fetch_shortcut network/timeout %s (attempt %d): %s", url, attempt, e)
+                logging.warning(
+                    "fetch_shortcut network/timeout %s (attempt %d): %s",
+                    url,
+                    attempt,
+                    e,
+                )
                 await asyncio.sleep(_BACKOFF_BASE * attempt)
                 continue
     logging.error("fetch_shortcut failed after retries: %s", url)
@@ -839,6 +993,7 @@ async def help_form(message: types.Message):
     )
     await message.answer(text=text, parse_mode=ParseMode.MARKDOWN_V2)
 
+
 @dp.message(Command(commands=["profile"]))
 async def help_form(message: types.Message):
     user = await fetch_user(message.from_user.id)
@@ -852,11 +1007,14 @@ async def help_form(message: types.Message):
 
     if user_is_premium:
         try:
-            user_subscription = user.get("subscription") or {}
-            valid_until = user_subscription.get("validUntil")
+            subscriptions = user.get("subscription", [])
+            active_subscription = next((sub for sub in subscriptions if sub.get("status") == "ACTIVE"), None)
+            valid_until = active_subscription.get("validUntil") if active_subscription else None
             if valid_until:
                 subscription_expired = datetime.fromisoformat(valid_until)
-                subscription_expired_normalized_time = subscription_expired.strftime("%d.%m.%Y")
+                subscription_expired_normalized_time = subscription_expired.strftime(
+                    "%d.%m.%Y"
+                )
             else:
                 subscription_expired_normalized_time = "-"
             subscription_name = "Pro"
@@ -880,7 +1038,6 @@ async def help_form(message: types.Message):
         f" <b>❔Обычные вопросы:</b> {user_free_questions} "
     )
     await message.answer(text=text, parse_mode=ParseMode.HTML)
-
 
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("shortcut-sel_"))
@@ -1018,7 +1175,7 @@ async def patch_user_info(dto: dict) -> dict:
     async with aiohttp.ClientSession() as session:
         async with session.patch(f"{API_URL}/user", json=dto) as resp:
             resp.raise_for_status()
-            return await resp.json()    
+            return await resp.json()
 
 
 async def show_roles_menu(target, state: FSMContext):
@@ -1076,14 +1233,16 @@ async def cb_role_select(query: types.CallbackQuery, state: FSMContext):
         await query.answer("✅ Системный промпт обновлён")
         await show_roles_menu(query, state)
 
+
 import re
 from typing import Tuple
+
 
 def extract_and_strip_think(text: str) -> Tuple[str, str]:
     m = re.search(r"<think\b[^>]*>([\s\S]*?)</think\s*>", text, flags=re.IGNORECASE)
     if m:
         think_text = m.group(1).strip()
-        visible_text = (text[:m.start()] + text[m.end():]).strip()
+        visible_text = (text[: m.start()] + text[m.end() :]).strip()
         return visible_text, think_text
 
     m_close = re.search(r"</think\s*>", text, flags=re.IGNORECASE)
@@ -1093,8 +1252,6 @@ def extract_and_strip_think(text: str) -> Tuple[str, str]:
         return visible_text, think_text
 
     return text.strip(), ""
-
-
 
 
 def is_blank_simple(s: str) -> bool:
@@ -1129,7 +1286,7 @@ async def message_router(message: types.Message, state: FSMContext):
     if message.text is None and message.caption is None and message.voice is None:
         return
     if any(txt.startswith(cmd) for cmd in forbidden_commands):
-        return 
+        return
     data = await state.get_data()
     mode = data.get("mode")
     edit_target = data.get("edit_target")
@@ -1189,16 +1346,27 @@ async def message_router(message: types.Message, state: FSMContext):
         }
         if chat_id:
             payload["chatId"] = chat_id
-    if (message.document and not (message.document.mime_type or "").startswith("image/")) or message.audio or message.voice:
+    if (
+        (
+            message.document
+            and not (message.document.mime_type or "").startswith("image/")
+        )
+        or message.audio
+        or message.voice
+    ):
         is_forwarded = bool(
-            message.forward_from or message.forward_from_chat or message.forward_sender_name
+            message.forward_from
+            or message.forward_from_chat
+            or message.forward_sender_name
         )
         doc = message.document or message.audio or message.voice
         form_data = aiohttp.FormData()
         caption = message.caption or "Игнорируй этот текст,  читай только что выше"
         form_data.add_field("prompt", caption, content_type="text/plain")
-        form_data.add_field("telegramId", str(message.from_user.id), content_type="text/plain")
-        form_data.add_field("chatId", str(chat_id), content_type='text/plain')
+        form_data.add_field(
+            "telegramId", str(message.from_user.id), content_type="text/plain"
+        )
+        form_data.add_field("chatId", str(chat_id), content_type="text/plain")
         form_data.add_field("isForwarded", str(is_forwarded), content_type="text/plain")
         if not doc:
             return
@@ -1220,7 +1388,7 @@ async def message_router(message: types.Message, state: FSMContext):
             if isinstance(form_data, aiohttp.FormData):
                 async with session.post(f"{API_URL}/messages", data=form_data) as resp:
                     text = await resp.text()
-                    
+
                     if resp.status >= 400:
                         try:
                             err = await resp.json()
@@ -1448,6 +1616,7 @@ async def message_router(message: types.Message, state: FSMContext):
         finally:
             await state.update_data(is_locked=False)
 
+
 _ZW_MARKER = "\u2063\u2063\u2063"
 _ZW_ZERO = "\u200b"
 _ZW_ONE = "\u200c"
@@ -1615,6 +1784,7 @@ def make_final_text_by_truncating_hidden(think_text: str, max_len: int = 4096) -
 
 import socket
 
+
 async def _wait_port_up(port: int, timeout: float = 10.0) -> bool:
     def _check(port, timeout):
         deadline = time.time() + timeout
@@ -1635,11 +1805,17 @@ async def main():
 
     print(f"[boot] starting health server on 0.0.0.0:{port} ...", flush=True)
     health_runner = await _start_health_server(port)
-    print("[boot] health server started, waiting for port to accept connections...", flush=True)
+    print(
+        "[boot] health server started, waiting for port to accept connections...",
+        flush=True,
+    )
 
     ok = await _wait_port_up(port, timeout=10.0)
     if not ok:
-        print(f"[boot][WARN] port {port} is not accepting connections after wait; continuing anyway.", flush=True)
+        print(
+            f"[boot][WARN] port {port} is not accepting connections after wait; continuing anyway.",
+            flush=True,
+        )
     else:
         print(f"[boot] port {port} is reachable (self-check OK).", flush=True)
 
@@ -1647,7 +1823,7 @@ async def main():
     print("[boot] started polling task", flush=True)
 
     try:
-        await polling_task 
+        await polling_task
     except asyncio.CancelledError:
         pass
     except Exception as e:

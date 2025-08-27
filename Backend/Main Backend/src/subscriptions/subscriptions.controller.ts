@@ -16,4 +16,9 @@ export class SubscriptionsController {
   ) {
     return this.subscriptionsService.newSubscription(dto);
   }
+
+  @Post('trial')
+  newTrialSubscription(@Body() dto: { userId: string }) {
+    return this.subscriptionsService.newTrialSubscription(dto);
+  }
 }

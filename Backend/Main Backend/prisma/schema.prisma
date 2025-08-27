@@ -9,18 +9,18 @@ datasource db {
 }
 
 model User {
-  id               String        @id @default(uuid())
-  telegramId       String           @unique
+  id               String          @id @default(uuid())
+  telegramId       String          @unique
   userName         String
   systemPrompt     String
   defaultModelId   String
-  defaultModel     AIModel       @relation(fields: [defaultModelId], references: [id])
+  defaultModel     AIModel         @relation(fields: [defaultModelId], references: [id])
   freeQuestions    Int
   premiumQuestions Int
-  createdAt        DateTime      @default(now())
+  createdAt        DateTime        @default(now())
   chats            Chat[]
   Messages         Message[]
-  subscription     Subscription?
+  subscription     Subscription[]
   Shortcuts        Shortcut[]
 }
 
@@ -70,8 +70,9 @@ model Subscription {
   createdAt         DateTime           @default(now())
   validUntil        DateTime
   status            SubscriptionStatus
-  telegramPaymentId String
-  providerPaymentId String
+  kind              SubscriptionKind
+  telegramPaymentId String?
+  providerPaymentId String?
 
   @@index([userId])
 }
@@ -89,6 +90,11 @@ model Shortcut {
 enum SubscriptionStatus {
   ACTIVE
   EXPIRED
+}
+
+enum SubscriptionKind {
+  TRIAL
+  PAID
 }
 
 enum MessageRole {

@@ -109,11 +109,15 @@ export class MessagesService {
       }
 
       if (model.premium && user.premiumQuestions <= 0) {
-        throw new ForbiddenException('У вас закончились премиум вопросы');
+        throw new ForbiddenException(
+          'У вас закончились премиум вопросы. Хотите получить больше? Попробуйте про подписку /pro',
+        );
       }
 
       if (!model.premium && user.freeQuestions <= 0) {
-        throw new ForbiddenException('У вас закончились бесплатные вопросы');
+        throw new ForbiddenException(
+          'У вас закончились бесплатные вопросы. Хотите получить больше? Попробуйте про подписку /pro',
+        );
       }
 
       if (dto.image) {
@@ -205,6 +209,9 @@ export class MessagesService {
       });
       let response;
       try {
+        const userSubscriber = user.subscription.find(
+          (sub) => sub.status == 'ACTIVE',
+        );
         response = await axios.post(
           `${this.configService.get<string>('LLM_SERVER_URL')}/llm`,
           {
@@ -212,7 +219,7 @@ export class MessagesService {
             model: model.systemName,
             provider: model.provider,
             premium: true,
-            is_agent: user.subscription?.status == 'ACTIVE',
+            is_agent: userSubscriber,
           },
           {
             headers: {

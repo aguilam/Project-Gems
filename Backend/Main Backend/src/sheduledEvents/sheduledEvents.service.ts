@@ -29,11 +29,14 @@ export class sheduledEventsService {
     }
     for (const user of users) {
       try {
+        const userSubscriber = user.subscription.find(
+          (sub) => sub.status == 'ACTIVE',
+        );
         await this.prisma.user.update({
           where: { id: user.id },
           data: {
-            freeQuestions: user.subscription?.status == 'ACTIVE' ? 35 : 20,
-            premiumQuestions: user.subscription?.status == 'ACTIVE' ? 4 : 0,
+            freeQuestions: userSubscriber ? 35 : 20,
+            premiumQuestions: userSubscriber ? 4 : 0,
           },
         });
       } catch (err) {

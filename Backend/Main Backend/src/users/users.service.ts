@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
-
+import { PostHog } from 'posthog-node';
 export class User {
   telegramId: string;
   username?: string;
@@ -17,7 +17,16 @@ export class UsersService {
   constructor(private prisma: PrismaService) {}
 
   async login(dto: User) {
+    const client = new PostHog(
+      'phc_7dIIXaRO6KyWSjenkV1cJ2xfvDjxgybB0cpLXxna78S',
+      { host: 'https://eu.i.posthog.com' },
+    );
+
     dto.telegramId = String(dto.telegramId);
+    const existing_user = await this.prisma.user.findUnique({
+      where: { telegramId: dto.telegramId },
+    });
+    const is_existing_user = existing_user == null ? false : true;
     const user = await this.prisma.user.upsert({
       where: { telegramId: dto.telegramId },
       create: {
@@ -33,7 +42,14 @@ export class UsersService {
       update: { userName: dto.username },
       include: { defaultModel: true },
     });
-    return user;
+
+    if (!is_existing_user) {
+      client.capture({
+        distinctId: user.id,
+        event: 'New User',
+      });
+    }
+    return { user: user, existing: is_existing_user };
   }
 
   async getUserByTelegramId(telegramId: string) {

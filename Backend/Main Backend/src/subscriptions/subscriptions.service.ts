@@ -16,18 +16,14 @@ export class SubscriptionsService {
     );
     const validUntil = new Date();
     validUntil.setMonth(validUntil.getMonth() + 1);
-    await this.prisma.subscription.upsert({
-      where: { userId: dto.userId },
-      create: {
+    await this.prisma.subscription.create({
+      data: {
         userId: dto.userId,
         status: 'ACTIVE',
         validUntil: validUntil,
         telegramPaymentId: dto.telegramPaymentId,
         providerPaymentId: dto.providerPaymentId,
-      },
-      update: {
-        status: 'ACTIVE',
-        validUntil: validUntil,
+        kind: 'PAID',
       },
     });
 
@@ -53,5 +49,49 @@ export class SubscriptionsService {
     });
 
     return true;
+  }
+
+  async newTrialSubscription(dto: { userId: string }) {
+    const existingSubscription = await this.prisma.subscription.findFirst({
+      where: { userId: dto.userId },
+    });
+    if (!existingSubscription) {
+      const client = new PostHog(
+        'phc_7dIIXaRO6KyWSjenkV1cJ2xfvDjxgybB0cpLXxna78S',
+        { host: 'https://eu.i.posthog.com' },
+      );
+      const validUntil = new Date();
+      validUntil.setDate(validUntil.getDate() + 14);
+      await this.prisma.subscription.create({
+        data: {
+          userId: dto.userId,
+          status: 'ACTIVE',
+          validUntil: validUntil,
+          kind: 'TRIAL',
+        },
+      });
+
+      client.capture({
+        distinctId: dto.userId,
+        event: 'Trial started',
+      });
+
+      await client.shutdown();
+
+      await this.prisma.user.update({
+        where: {
+          id: dto.userId,
+        },
+        data: {
+          freeQuestions: 35,
+          premiumQuestions: 4,
+        },
+      });
+      return true;
+    } else {
+      throw new Error(
+        'Активировать пробный период не удалось. У вас уже была активирована подписка',
+      );
+    }
   }
 }
