@@ -39,6 +39,7 @@ from typing import Optional, Any
 import logging
 
 logging.basicConfig(level=logging.DEBUG)
+import sentry_sdk
 
 _RETRIES = 3
 _BACKOFF_BASE = 0.5
@@ -177,7 +178,7 @@ async def cmd_start(message: types.Message):
         async with aiohttp.ClientSession() as session:
             async with session.post(f"{API_URL}/user", json=data) as resp:
                 await message.answer(
-                    "Привет! Вот основные команды: \n\n /profile - узнать информацию о профиле и количестве оставшихся вопросов \n /models - выбрать другую ИИ-модель \n /role - поменять роль(системный промпт) для ИИ \n /chats - поменять текущий чат или создать новый \n /shortcuts - создать новый шорткат или поменять текущий \n /support - сообщить о проблеме, ошибке или предложении \n /pro - не хватает текущих возможностей и моделей? Попробуйте pro подписку \n\n <b>Что-бы начать общение просто напишите свой запрос!</b>",
+                    "Привет! Вот основные команды: \n\n /profile — информация о профиле и оставшихся вопросах \n /models — переключиться на другую ИИ-модель \n /role — сменить роль (системный промпт) для ИИ \n /chats — открыть другой чат или создать новый \n /shortcuts — создать или редактировать шорткат \n /support — сообщить об ошибке, баге или предложении \n /pro - не хватает текущих возможностей и моделей? Попробуйте pro подписку \n\n <b>Чтобы начать — просто напишите ваш запрос!</b>",
                     parse_mode=ParseMode.HTML,
                 )
                 resp.raise_for_status()
@@ -195,7 +196,6 @@ async def cmd_start(message: types.Message):
                     message_id=message_to_pin.message_id,
                     disable_notification=True,
                 )
-                print(user_existing)
                 if user_existing == False:
                     await message.bot.send_message(
                         chat_id=chat_id,
@@ -449,11 +449,9 @@ async def send_offer(message: types.message):
         "• 1000 обычных и 120 премиум вопросов\n"
         "• Доступ к премиум-моделям генерации текста и изображений\n"
         "• Повышение скорости ответа моделей Llama в 3 раза\n"
-        "• Распознавание голосовых сообщений других пользователей\n"
-        "• Шорткаты для быстрого доступа\n"
         "• Агентские функции (поиск, улучшенная память, запуск Python, модуль WolframAlpha)\n"
         "• Получаете новые функции первыми\n\n"
-        "Нажмите «Оплатить», чтобы оформить подписку."
+        "Нажмите «Перейти к оплате», чтобы оформить подписку."
     )
     await message.answer(text=text, reply_markup=offer_keyboard())
 
@@ -870,9 +868,9 @@ async def delete_shortcuts(id: int) -> Optional[dict]:
     return None
 
 
-async def patch_shortcuts(id: int, payload: dict | None = None) -> Optional[dict]:
+async def patch_shortcuts(id: str, payload: dict | None = None) -> Optional[dict]:
     url = f"{API_URL}/shortcuts/{id}"
-    body = payload or {}
+    body = {"id": id, **(payload or {})}
     timeout = aiohttp.ClientTimeout(total=_TIMEOUT_SECONDS)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         for attempt in range(1, _RETRIES + 1):
@@ -916,12 +914,11 @@ async def shortcuts_command(message: types.Message, state: FSMContext):
     except Exception as e:
         await message.answer(f"Не удалось получить список шорткатов: {e}")
         return
-    data = await state.get_data()
-    shortcut_mode = data.get("shortcut_mode")
+    
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
-                text="➕ Создать новый шорткат", callback_data=f"shortcut-sel_"
+                text="➕ Создать новый шорткат", callback_data="shortcut-create"
             )
         ],
     ]
@@ -935,15 +932,9 @@ async def shortcuts_command(message: types.Message, state: FSMContext):
 
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
 
-    text_map = {
-        None: "<b>Шорткат - удобная система для того, что бы не вводить одинаковый текст по сотню раз</b> \n\n Когда вы введёте команду вашего шортката, то автоматически в начало вашего запроса добавиться текст из инструкции которую вы ввели, а сам ответ будет отправлен той модели, которую вы выбрали. \n\n Выберите шорткат:"
-    }
-    text = text_map[shortcut_mode]
+    text = "<b>Шорткат - удобная система для того, что бы не вводить одинаковый текст по сотню раз</b> \n\n Когда вы введёте команду вашего шортката, то автоматически в начало вашего запроса добавиться текст из инструкции которую вы ввели, а сам ответ будет отправлен той модели, которую вы выбрали. \n\n Выберите шорткат:"
 
     await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
-
-    await state.update_data(shortcut_mode="edit")
-
 
 async def fetch_shortcut(id: int) -> Optional[dict]:
     url = f"{API_URL}/shortcuts/{id}"
@@ -952,7 +943,6 @@ async def fetch_shortcut(id: int) -> Optional[dict]:
         for attempt in range(1, _RETRIES + 1):
             try:
                 async with session.get(url) as resp:
-                    text = await resp.text()
                     logging.info("fetch_shortcut GET %s -> %s", url, resp.status)
                     resp.raise_for_status()
                     try:
@@ -988,7 +978,7 @@ async def fetch_shortcut(id: int) -> Optional[dict]:
 async def help_form(message: types.Message):
     text = (
         "*Есть предложение\, проблема или может нашли баг?*\n\n"
-        "О них вы можете сообщить\, заполнив полностью анонимную анкету ниже\:\n\n"
+        "О них вы можете сообщить\, заполнив форму ниже\:\n\n"
         "https://forms\.gle/Cwb4PJMnSJ8ZeEgo7\n"
     )
     await message.answer(text=text, parse_mode=ParseMode.MARKDOWN_V2)
@@ -1041,7 +1031,7 @@ async def help_form(message: types.Message):
 
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("shortcut-sel_"))
-async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
+async def cb_select_shortcut(query: types.CallbackQuery, state: FSMContext):
     await query.answer()
 
     shortcut_id = query.data.split("_", 1)[1].lstrip(":")
@@ -1050,9 +1040,6 @@ async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
     if not shortcut:
         await query.message.answer("Шорткат не найден.")
         return
-
-    data = await state.get_data()
-    mode = data.get("shortcut_mode")
 
     command = shortcut.get("command", "")
     instruction = shortcut.get("instruction", "")
@@ -1083,6 +1070,11 @@ async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
                 text="🗑Удалить шорткат", callback_data=f"shortcut-delete_{shortcut_id}"
             )
         ],
+        [
+            InlineKeyboardButton(
+                text="↩️Назад", callback_data="shortcut-back"
+            )
+        ],
     ]
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -1095,6 +1087,160 @@ async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
     await query.message.edit_text(
         short_cut_info, parse_mode=ParseMode.HTML, reply_markup=kb
     )
+
+
+@dp.callback_query(lambda c: c.data == "shortcut-create")
+async def cb_create_shortcut(query: types.CallbackQuery, state: FSMContext):
+    await query.answer()
+    await state.update_data(shortcut_mode="create")
+    await state.update_data(shortcut_step="command")
+    
+    await query.message.edit_text(
+        "Создание нового шортката\n\nВведите команду для шортката (например: /image):",
+        parse_mode=ParseMode.HTML
+    )
+
+
+@dp.callback_query(lambda c: c.data == "shortcut-back")
+async def cb_shortcut_back(query: types.CallbackQuery, state: FSMContext):
+    await query.answer()
+    await state.update_data(shortcut_mode=None)
+    await shortcuts_command(query.message, state)
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("shortcut-edit_cmd_"))
+async def cb_edit_shortcut_command(query: types.CallbackQuery, state: FSMContext):
+    await query.answer()
+    shortcut_id = query.data.replace("shortcut-edit_cmd_", "")
+    await state.update_data(shortcut_mode="edit")
+    await state.update_data(shortcut_step="command")
+    await state.update_data(shortcut_id=shortcut_id)
+    
+    await query.message.edit_text(
+        "Введите новую команду для шортката:",
+        parse_mode=ParseMode.HTML
+    )
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("shortcut-edit_instr_"))
+async def cb_edit_shortcut_instruction(query: types.CallbackQuery, state: FSMContext):
+    await query.answer()
+    shortcut_id = query.data.replace("shortcut-edit_instr_", "")
+    await state.update_data(shortcut_mode="edit")
+    await state.update_data(shortcut_step="instruction")
+    await state.update_data(shortcut_id=shortcut_id)
+    
+    await query.message.edit_text(
+        "Введите новую инструкцию для шортката:",
+        parse_mode=ParseMode.HTML
+    )
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("shortcut-edit_model_"))
+async def cb_edit_shortcut_model(query: types.CallbackQuery, state: FSMContext):
+    await query.answer()
+    shortcut_id = query.data.replace("shortcut-edit_model_", "")
+    await state.update_data(shortcut_mode="edit")
+    await state.update_data(shortcut_step="model")
+    await state.update_data(shortcut_id=shortcut_id)
+    
+    models = await fetch_models()
+    user = await fetch_user(query.from_user.id)
+    user_premium = is_user_premium(user)
+    
+    buttons: list[InlineKeyboardButton] = []
+    for m in models:
+        model_name = m["name"]
+        icons = ""
+        if m.get("premium", False) and not user_premium:
+            icons = f"🔒{icons}"
+            continue 
+        if "reasoning" in m["tags"]:
+            icons = f"🧠{icons}"
+        if "image" in m["tags"]:
+            icons = f"🖼️{icons}"
+        if m["premium"] == True:
+            icons = f"⭐ {icons}"
+        
+        label = f"{icons} {model_name}"
+        print(m['id'])
+        print(shortcut_id)
+        buttons.append(
+            InlineKeyboardButton(
+                text=label, 
+                callback_data=f"shortcut-model_select_{shortcut_id}_{m['id']}"
+            )
+        )
+    
+    rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
+    rows.append([InlineKeyboardButton(text="↩️Отмена", callback_data=f"shortcut-sel_{shortcut_id}")])
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    
+    await query.message.edit_text(
+        "Выберите модель для шортката:",
+        reply_markup=kb,
+        parse_mode=ParseMode.HTML
+    )
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("shortcut-model_select_"))
+async def cb_select_shortcut_model(query: types.CallbackQuery, state: FSMContext):
+    await query.answer()
+    parts = query.data.split("_")
+    print(parts)
+    shortcut_id = parts[2]
+    print(shortcut_id)
+    model_id = parts[3]
+    print(model_id)
+    
+    try:
+        await patch_shortcuts(shortcut_id, {"modelId": model_id})
+        await query.answer("✅ Модель обновлена", show_alert=True)
+        await shortcuts_command(query.message, state)
+    except Exception as e:
+        await query.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("shortcut-delete_"))
+async def cb_delete_shortcut(query: types.CallbackQuery, state: FSMContext):
+    await query.answer()
+    shortcut_id = query.data.replace("shortcut-delete_", "")
+    
+    try:
+        await delete_shortcuts(shortcut_id)
+        await query.answer("✅ Шорткат удалён", show_alert=True)
+        await shortcuts_command(query.message, state)
+    except Exception as e:
+        await query.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("shortcut-create_model_"))
+async def cb_create_shortcut_final(query: types.CallbackQuery, state: FSMContext):
+    await query.answer()
+    parts = query.data.split("_")
+    model_id = parts[2]
+    
+    data = await state.get_data()
+    command = data.get("shortcut_command")
+    instruction = data.get("shortcut_instruction")
+    
+    try:
+        shortcut_data = {
+            "telegramId": query.from_user.id,
+            "command": command,
+            "instruction": instruction,
+            "modelId": model_id
+        }
+        
+        result = await add_shortcuts(shortcut_data)
+        if result:
+            await query.answer("✅ Шорткат создан!", show_alert=True)
+            await state.update_data(shortcut_mode=None, shortcut_step=None, shortcut_command=None, shortcut_instruction=None)
+            await shortcuts_command(query.message, state)
+        else:
+            await query.answer("❌ Ошибка при создании шортката", show_alert=True)
+    except Exception as e:
+        await query.answer(f"❌ Ошибка: {e}", show_alert=True)
 
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("model_select:"))
@@ -1124,12 +1270,19 @@ async def on_model_selected(callback: CallbackQuery):
             disable_notification=True,
         )
     else:
-        base = original.split("|", 1)[1]
-        await bot.edit_message_text(
-            text=f"📝{model_title} |{base}",
-            chat_id=callback.message.chat.id,
-            message_id=pinned.message_id,
-        )
+        if original and "|" in original:
+            base = original.split("|", 1)[1]
+            await bot.edit_message_text(
+                text=f"📝{model_title} |{base}",
+                chat_id=callback.message.chat.id,
+                message_id=pinned.message_id,
+            )
+        else:
+            await bot.edit_message_text(
+                text=f"📝{model_title}",
+                chat_id=callback.message.chat.id,
+                message_id=pinned.message_id,
+            )
     await callback.answer(text="✅ Модель обновлена", show_alert=False)
 
 
@@ -1296,10 +1449,6 @@ async def message_router(message: types.Message, state: FSMContext):
     if data.get("is_locked") == True:
         await message.answer("Дождитесь пожалуйста ответа модели")
         return
-    await state.update_data(is_locked=True)
-    target = await message.answer(
-        "Нейросеть думает🤔", parse_mode=ParseMode.MARKDOWN_V2
-    )
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     chat_id = data.get("active_chat", "0")
 
@@ -1321,12 +1470,98 @@ async def message_router(message: types.Message, state: FSMContext):
             await message.answer("✅ Ваш системный промпт сохранён")
             await show_roles_menu(message, state)
             return
+            
+        shortcut_mode = data.get("shortcut_mode")
+        if shortcut_mode in ["create", "edit"]:
+            shortcut_step = data.get("shortcut_step")
+            shortcut_id = data.get("shortcut_id")
+            
+            if shortcut_mode == "create":
+                if shortcut_step == "command":
+                    command = message.text.strip()
+                    if not command.startswith("/"):
+                        command = "/" + command
+                    
+                    await state.update_data(shortcut_command=command)
+                    await state.update_data(shortcut_step="instruction")
+                    await message.answer("Введите инструкцию для шортката:")
+                    return
+                elif shortcut_step == "instruction":
+                    command = data.get("shortcut_command")
+                    instruction = message.text.strip()
+                    
+                    models = await fetch_models()
+                    user = await fetch_user(message.from_user.id)
+                    user_premium = is_user_premium(user)
+                    
+                    buttons: list[InlineKeyboardButton] = []
+                    for m in models:
+                        model_name = m["name"]
+                        icons = ""
+                        if m.get("premium", False) and not user_premium:
+                            icons = f"🔒{icons}"
+                            continue 
+                        if "reasoning" in m["tags"]:
+                            icons = f"🧠{icons}"
+                        if "image" in m["tags"]:
+                            icons = f"🖼️{icons}"
+                        if m["premium"] == True:
+                            icons = f"⭐ {icons}"
+                        
+                        label = f"{icons} {model_name}"
+                        buttons.append(
+                            InlineKeyboardButton(
+                                text=label, 
+                                callback_data=f"shortcut-create_model_{m['id']}"
+                            )
+                        )
+                    
+                    rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
+                    rows.append([InlineKeyboardButton(text="↩️Отмена", callback_data="shortcut-back")])
+                    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+                    
+                    await state.update_data(shortcut_command=command, shortcut_instruction=instruction)
+                    
+                    await message.answer(
+                        "Выберите модель для шортката:",
+                        reply_markup=kb,
+                        parse_mode=ParseMode.HTML
+                    )
+                    return
+                    
+            elif shortcut_mode == "edit":
+                if shortcut_step == "command":
+                    command = message.text.strip()
+                    if not command.startswith("/"):
+                        command = "/" + command
+                    
+                    try:
+                        await patch_shortcuts(shortcut_id, {"command": command})
+                        await message.answer("✅ Команда обновлена")
+                        await state.update_data(shortcut_mode=None, shortcut_step=None, shortcut_id=None)
+                        await shortcuts_command(message, state)
+                    except Exception as e:
+                        await message.answer(f"❌ Ошибка: {e}")
+                    return
+                elif shortcut_step == "instruction":
+                    try:
+                        await patch_shortcuts(shortcut_id, {"instruction": message.text.strip()})
+                        await message.answer("✅ Инструкция обновлена")
+                        await state.update_data(shortcut_mode=None, shortcut_step=None, shortcut_id=None)
+                        await shortcuts_command(message, state)
+                    except Exception as e:
+                        await message.answer(f"❌ Ошибка: {e}")
+                    return
         payload = {
             "telegramId": message.from_user.id,
             "prompt": message.text,
         }
         if chat_id:
             payload["chatId"] = chat_id
+        await state.update_data(is_locked=True)
+        target = await message.answer(
+            "Нейросеть думает🤔", parse_mode=ParseMode.MARKDOWN_V2
+        )
     if message.photo:
         photo: types.PhotoSize = message.photo[-1]
 
@@ -1801,6 +2036,10 @@ async def _wait_port_up(port: int, timeout: float = 10.0) -> bool:
 
 
 async def main():
+    sentry_sdk.init(
+    dsn="https://e8b7b18ddf5122642e1be46af0e0af02@o4509825102708736.ingest.de.sentry.io/4509920637812816",
+       send_default_pii=True,
+    )
     port = int(os.environ.get("PORT", 8000))
 
     print(f"[boot] starting health server on 0.0.0.0:{port} ...", flush=True)

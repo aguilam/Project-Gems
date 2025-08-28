@@ -98,7 +98,6 @@ export class ShortcutsService {
   }
   async patchShortcutById(dto: PatchShortcutDto) {
     const data: Record<string, any> = {};
-
     if (dto.command !== undefined) {
       if (dto.command === null) {
         data.command = null;

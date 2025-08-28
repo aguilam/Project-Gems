@@ -48,15 +48,15 @@ export class ShortcutsController {
 
   @Patch(':id')
   async patchShortcutById(
-    @Param(':id')
+    @Param('id') id: string,
     @Body()
     dto: {
-      id: string;
       command?: string;
       modelId?: string;
       instruction?: string;
     },
   ) {
-    await this.shortcutService.patchShortcutById(dto);
+    const fullDto = { id, ...dto };
+    return await this.shortcutService.patchShortcutById(fullDto);
   }
 }

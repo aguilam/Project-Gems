@@ -37,6 +37,9 @@ except Exception as e:
     Document = None
 
 import logging.config
+import sentry_sdk
+
+
 
 LOGGING = {
     "version": 1,
@@ -75,8 +78,13 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-app = FastAPI()
+sentry_sdk.init(
+    dsn="https://63064e271f9344249422cc2ad8f4448f@o4509825102708736.ingest.de.sentry.io/4509920603996240",
+    send_default_pii=True,
+)
 
+
+app = FastAPI()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY_1", "")
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
