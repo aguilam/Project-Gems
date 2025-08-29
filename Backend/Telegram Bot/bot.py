@@ -6,7 +6,6 @@ from aiogram.types import (
     CallbackQuery,
     BufferedInputFile,
 )
-from aiogram.exceptions import TelegramForbiddenError
 import aiohttp
 from aiohttp import ClientError
 import asyncio
@@ -1844,6 +1843,7 @@ async def message_router(message: types.Message, state: FSMContext):
 
                     try:
                         result = await resp.json()
+                        logging.info("result GET %s -> %s", result)
                         response_chat_id = result.get("chatId", "0")
                         actual_chat_id = data.get("active_chat")
                         if response_chat_id != actual_chat_id:
@@ -1910,38 +1910,31 @@ async def message_router(message: types.Message, state: FSMContext):
                             raw_visible, think_text = extract_and_strip_think(raw)
                             clean = markdownify(raw_visible)
                             final_text = clean[:4096]
-                        if not is_blank_simple(think_text):
-                            try:
-                                available_space = 4096 - len(final_text)
-
-                                hidden_part = make_final_text_by_truncating_hidden(
-                                    think_text, max_len=available_space 
-                                )
-
-                                text_to_send = final_text + hidden_part
-
+                            if not is_blank_simple(think_text):
+                                try:
+                                    byte_text = make_final_text_by_truncating_hidden(
+                                        think_text, max_len=4096
+                                    )
+                                except ValueError:
+                                    print("bad")
                                 kb = toggle_think_buttons(
                                     InlineKeyboardMarkup(inline_keyboard=[]), show=False
                                 )
                                 await target.delete()
                                 await message.answer(
-                                    text=text_to_send,
+                                    text=byte_text,
                                     reply_markup=kb,
                                 )
-                            except TelegramForbiddenError:
-                                print(f"USER BLOCKED THE BOT! User ID: {message.from_user.id}")
-                            except ValueError as e:
-                                print(f"ERROR: Could not create hidden payload. Reason: {e}. Sending visible part only.")
-
+                                await message.reply(
+                                    final_text,
+                                    parse_mode=ParseMode.MARKDOWN_V2,
+                                )
+                            else:
+                                final_text = clean
                                 await target.delete()
                                 await message.reply(
                                     final_text, parse_mode=ParseMode.MARKDOWN_V2
                                 )
-                        else:
-                            await target.delete()
-                            await message.reply(
-                                final_text, parse_mode=ParseMode.MARKDOWN_V2
-                            )
                     except Exception as e:
                         await target.delete()
                         await message.answer(
