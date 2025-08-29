@@ -36,7 +36,7 @@ export class UsersService {
         freeQuestions: 20,
         premiumQuestions: 0,
         defaultModel: {
-          connect: { id: '5f3ac64b-34a9-4edf-8805-b20b8b9d1596' },
+          connect: { id: '14' },
         },
       },
       update: { userName: dto.username },

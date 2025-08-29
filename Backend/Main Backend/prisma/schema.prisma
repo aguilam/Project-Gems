@@ -70,6 +70,7 @@ model Subscription {
   createdAt         DateTime           @default(now())
   validUntil        DateTime
   status            SubscriptionStatus
+  plan              SubscriptionPlan
   kind              SubscriptionKind
   telegramPaymentId String?
   providerPaymentId String?
@@ -95,6 +96,10 @@ enum SubscriptionStatus {
 enum SubscriptionKind {
   TRIAL
   PAID
+}
+
+enum SubscriptionPlan {
+  PRO
 }
 
 enum MessageRole {

@@ -38,16 +38,26 @@ export class ChatsService {
     return chat;
   }
 
-  async getAllChats(telegramId: string) {
+  async getAllChats(telegramId: string, page: number) {
+    const take = 10;
     const chats = await this.prisma.chat.findMany({
       where: { users: { some: { telegramId } } },
+      skip: (page - 1) * 10,
+      take: take,
     });
-    return chats;
+    const countUserChats = await this.prisma.chat.count({
+      where: { users: { some: { telegramId } } },
+    });
+    const pagesCount = Math.ceil(countUserChats / take);
+    return { chats: chats, pagesCount: pagesCount };
   }
 
-  async getChatById(chatId: string): Promise<ChatWithMessages | null> {
+  async getChatById(
+    telegramId: string,
+    chatId: string,
+  ): Promise<ChatWithMessages | null> {
     const chat = await this.prisma.chat.findUnique({
-      where: { id: chatId },
+      where: { id: chatId, users: { some: { telegramId: telegramId } } },
       include: {
         messages: {
           select: {

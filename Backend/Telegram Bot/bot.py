@@ -6,6 +6,7 @@ from aiogram.types import (
     CallbackQuery,
     BufferedInputFile,
 )
+from aiogram.exceptions import TelegramForbiddenError
 import aiohttp
 from aiohttp import ClientError
 import asyncio
@@ -232,7 +233,6 @@ async def cmd_trial(msg: types.message):
 @dp.callback_query(lambda c: c.data == "activate_trial")
 async def on_activate_trial(query: CallbackQuery):
     await query.answer(text="Активирую...", show_alert=False)
-    print(query)
     await success_trial_handler(query.from_user.id, query.message.chat.id)
 
 async def success_trial_handler(user_telegram_id: int, chat_id: int):
@@ -254,8 +254,38 @@ async def success_trial_handler(user_telegram_id: int, chat_id: int):
         await bot.send_message(chat_id=chat_id, text=f"❗ Проблема при записи подписки: `{safe_error}`", parse_mode=ParseMode.MARKDOWN_V2)
 
 
-async def fetch_chats(telegram_id: int) -> list:
-    url = f"{API_URL}/chats?telegramId={telegram_id}"
+async def fetch_chats(telegram_id: int, chat_page: int) -> list:
+    url = f"{API_URL}/chats?telegramId={telegram_id}&page={chat_page}"
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for attempt in range(1, _RETRIES + 1):
+            try:
+                async with session.get(url) as resp:
+                    logging.info("fetch_chats GET %s -> %s", url, resp.status)
+                    resp.raise_for_status()
+                    return await resp.json()
+            except aiohttp.ClientResponseError as e:
+                logging.warning(
+                    "fetch_chats HTTP error %s (attempt %d): %s",
+                    url,
+                    attempt,
+                    getattr(e, "status", e),
+                )
+                if 500 <= getattr(e, "status", 500) < 600:
+                    await asyncio.sleep(_BACKOFF_BASE * attempt)
+                    continue
+                return []
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logging.warning(
+                    "fetch_chats network/timeout %s (attempt %d): %s", url, attempt, e
+                )
+                await asyncio.sleep(_BACKOFF_BASE * attempt)
+                continue
+    logging.error("fetch_chats failed after retries: %s", url)
+    return []
+
+async def fetch_chat(telegram_id: int, chat_id: int) -> list:
+    url = f"{API_URL}/chats/{chat_id}?telegramId={telegram_id}"
     timeout = aiohttp.ClientTimeout(total=15)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         for attempt in range(1, _RETRIES + 1):
@@ -292,7 +322,6 @@ async def delete_chat(chat_id: str) -> dict | None:
         for attempt in range(1, _RETRIES + 1):
             try:
                 async with session.delete(url) as resp:
-                    text = await resp.text()
                     logging.info("delete_chat DELETE %s -> %s", url, resp.status)
                     resp.raise_for_status()
                     try:
@@ -459,15 +488,24 @@ async def send_offer(message: types.message):
 async def show_chats_menu(target, state: FSMContext, mode: str = None):
     data = await state.get_data()
     active_chat = data.get("active_chat")
+    chat_page = data.get("chat_page") or 1
     telegram_id = target.from_user.id
 
     try:
-        chats = await fetch_chats(telegram_id)
+        chats_response = await fetch_chats(telegram_id, chat_page)
+        chats = chats_response["chats"]
+        pages_count = chats_response["pagesCount"]
     except Exception as e:
         await target.answer(f"Не удалось получить список чатов: {e}")
         return
 
     rows: list[list[InlineKeyboardButton]] = []
+    if(pages_count <= chat_page):
+        rows.append([InlineKeyboardButton(text="⬅️", callback_data="chat:prev"), InlineKeyboardButton(text=f"{chat_page} / {pages_count}", callback_data="mode:new")])
+    elif(chat_page <= 1):
+        rows.append([InlineKeyboardButton(text=f"{chat_page} / {pages_count}", callback_data="de") ,  InlineKeyboardButton(text="➡️", callback_data="chat:next")])
+    else:
+        rows.append([InlineKeyboardButton(text="⬅️", callback_data="chat:prev"), InlineKeyboardButton(text=f"{chat_page} / {pages_count}", callback_data="mode:new") ,  InlineKeyboardButton(text="➡️", callback_data="chat:next")])
     rows.append([InlineKeyboardButton(text="➕ Новый чат", callback_data="mode:new")])
     for chat in chats:
         label = chat.get("title") or chat["id"][:8]
@@ -514,6 +552,7 @@ async def show_chats_menu(target, state: FSMContext, mode: str = None):
 
 @dp.message(Command(commands=["chats"]))
 async def cmd_chats(message: types.Message, state: FSMContext):
+    await state.update_data(chat_page=1)
     await show_chats_menu(message, state, mode=None)
 
 
@@ -533,14 +572,25 @@ async def cb_mode(query: types.CallbackQuery, state: FSMContext):
         await show_chats_menu(query, state, mode=mode)
     await query.answer()
 
-
+@dp.callback_query(lambda c: c.data and c.data.startswith("chat:"))
+async def cb_mode(query: types.CallbackQuery, state: FSMContext):
+    mode = query.data.split(":", 1)[1]
+    data = await state.get_data()
+    chat_page = data.get("chat_page")
+    if mode == "prev":
+        await state.update_data(chat_page=chat_page - 1)
+        await show_chats_menu(query, state, mode=None)
+    if mode == "next":
+        await state.update_data(chat_page=chat_page + 1)
+        await show_chats_menu(query, state, mode=None)
+    await query.answer()
 @dp.callback_query(lambda c: c.data and c.data.startswith("sel_"))
 async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
     chat_id = query.data.split("_", 1)[1]
     data = await state.get_data()
     mode = data.get("mode")
     telegram_id = query.from_user.id
-
+    chat_page = data.get("chat_page")
     if mode == "delete":
         await delete_chat(chat_id)
         await query.answer("✅ Чат удалён")
@@ -555,14 +605,13 @@ async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
 
     else:
         try:
-            chats = await fetch_chats(telegram_id)
+            selected = await fetch_chat(telegram_id, chat_id)
         except Exception as e:
             await query.answer(
                 f"Не удалось получить список чатов: {e}", show_alert=True
             )
             return
 
-        selected = next((c for c in chats if c["id"] == chat_id), None)
         chat_title = (
             selected.get("title") if selected and selected.get("title") else chat_id[:8]
         )
@@ -641,7 +690,6 @@ async def fetch_user(telegram_id: int) -> dict | None:
         for attempt in range(1, _RETRIES + 1):
             try:
                 async with session.get(url) as resp:
-                    text = await resp.text()
                     logging.info("fetch_user GET %s -> %s", url, resp.status)
                     resp.raise_for_status()
                     return await resp.json()
@@ -718,6 +766,7 @@ def build_keyboard(
 ) -> InlineKeyboardMarkup:
     buttons: list[InlineKeyboardButton] = []
     for m in models:
+        
         model_name = m["name"]
         icons = ""
         callback_data = f"model_select:{m['id']}"
@@ -932,7 +981,7 @@ async def shortcuts_command(message: types.Message, state: FSMContext):
 
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
 
-    text = "<b>Шорткат - удобная система для того, что бы не вводить одинаковый текст по сотню раз</b> \n\n Когда вы введёте команду вашего шортката, то автоматически в начало вашего запроса добавиться текст из инструкции которую вы ввели, а сам ответ будет отправлен той модели, которую вы выбрали. \n\n Выберите шорткат:"
+    text = "<b>Шорткаты — это быстрые шаблоны, чтобы не вводить одно и то же по сто раз.</b> \n\nПри использовании шортката его инструкция автоматически добавится в начало вашего запроса, а ответ придёт от выбранной вами модели. \n\nВыберите или создайте шорткат и ускорьте работу."
 
     await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
@@ -1094,10 +1143,18 @@ async def cb_create_shortcut(query: types.CallbackQuery, state: FSMContext):
     await query.answer()
     await state.update_data(shortcut_mode="create")
     await state.update_data(shortcut_step="command")
-    
+
+    rows = [
+        [
+            InlineKeyboardButton(text="↩️ Назад", callback_data="shortcut-back")
+        ]
+    ]
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+
     await query.message.edit_text(
         "Создание нового шортката\n\nВведите команду для шортката (например: /image):",
-        parse_mode=ParseMode.HTML
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb
     )
 
 
@@ -1105,7 +1162,7 @@ async def cb_create_shortcut(query: types.CallbackQuery, state: FSMContext):
 async def cb_shortcut_back(query: types.CallbackQuery, state: FSMContext):
     await query.answer()
     await state.update_data(shortcut_mode=None)
-    await shortcuts_command(query.message, state)
+    await shortcuts_edit_answer(query.message, state, query.from_user.id)
 
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("shortcut-edit_cmd_"))
@@ -1115,11 +1172,20 @@ async def cb_edit_shortcut_command(query: types.CallbackQuery, state: FSMContext
     await state.update_data(shortcut_mode="edit")
     await state.update_data(shortcut_step="command")
     await state.update_data(shortcut_id=shortcut_id)
-    
+
+    rows = [
+        [
+            InlineKeyboardButton(text="↩️ Назад", callback_data=f"shortcut-sel_{shortcut_id}")
+        ]
+    ]
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+
     await query.message.edit_text(
         "Введите новую команду для шортката:",
-        parse_mode=ParseMode.HTML
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb
     )
+
 
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("shortcut-edit_instr_"))
@@ -1129,11 +1195,20 @@ async def cb_edit_shortcut_instruction(query: types.CallbackQuery, state: FSMCon
     await state.update_data(shortcut_mode="edit")
     await state.update_data(shortcut_step="instruction")
     await state.update_data(shortcut_id=shortcut_id)
-    
+
+    rows = [
+        [
+            InlineKeyboardButton(text="↩️ Назад", callback_data=f"shortcut-sel_{shortcut_id}")
+        ]
+    ]
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+
     await query.message.edit_text(
         "Введите новую инструкцию для шортката:",
-        parse_mode=ParseMode.HTML
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb
     )
+
 
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("shortcut-edit_model_"))
@@ -1163,8 +1238,6 @@ async def cb_edit_shortcut_model(query: types.CallbackQuery, state: FSMContext):
             icons = f"⭐ {icons}"
         
         label = f"{icons} {model_name}"
-        print(m['id'])
-        print(shortcut_id)
         buttons.append(
             InlineKeyboardButton(
                 text=label, 
@@ -1175,7 +1248,6 @@ async def cb_edit_shortcut_model(query: types.CallbackQuery, state: FSMContext):
     rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
     rows.append([InlineKeyboardButton(text="↩️Отмена", callback_data=f"shortcut-sel_{shortcut_id}")])
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
-    
     await query.message.edit_text(
         "Выберите модель для шортката:",
         reply_markup=kb,
@@ -1187,19 +1259,43 @@ async def cb_edit_shortcut_model(query: types.CallbackQuery, state: FSMContext):
 async def cb_select_shortcut_model(query: types.CallbackQuery, state: FSMContext):
     await query.answer()
     parts = query.data.split("_")
-    print(parts)
     shortcut_id = parts[2]
-    print(shortcut_id)
     model_id = parts[3]
-    print(model_id)
     
     try:
         await patch_shortcuts(shortcut_id, {"modelId": model_id})
         await query.answer("✅ Модель обновлена", show_alert=True)
-        await shortcuts_command(query.message, state)
+        await shortcuts_edit_answer(query.message, state, user_id=query.from_user.id) 
     except Exception as e:
         await query.answer(f"❌ Ошибка: {e}", show_alert=True)
 
+async def shortcuts_edit_answer(message: types.Message, state: FSMContext, user_id: int):
+    try:
+        user_shortcuts = await fetch_user_shortcuts(user_id)
+    except Exception as e:
+        await message.answer(f"Не удалось получить список шорткатов: {e}")
+        return
+    
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text="➕ Создать новый шорткат", callback_data="shortcut-create"
+            )
+        ],
+    ]
+    for shortcut in user_shortcuts:
+        label = shortcut.get("command") or shortcut["id"][:8]
+        id = shortcut.get("id")
+
+        rows.append(
+            [InlineKeyboardButton(text=label, callback_data=f"shortcut-sel_{id}")]
+        )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+
+    text = "<b>Шорткаты — это быстрые шаблоны, чтобы не вводить одно и то же по сто раз.</b> \n\n При использовании шортката его инструкция автоматически добавится в начало вашего запроса, а ответ придёт от выбранной вами модели. \n\n Выберите или создайте шорткат и ускорьте работу."
+
+    await message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("shortcut-delete_"))
 async def cb_delete_shortcut(query: types.CallbackQuery, state: FSMContext):
@@ -1209,7 +1305,7 @@ async def cb_delete_shortcut(query: types.CallbackQuery, state: FSMContext):
     try:
         await delete_shortcuts(shortcut_id)
         await query.answer("✅ Шорткат удалён", show_alert=True)
-        await shortcuts_command(query.message, state)
+        await shortcuts_edit_answer(query.message, state, query.from_user.id) 
     except Exception as e:
         await query.answer(f"❌ Ошибка: {e}", show_alert=True)
 
@@ -1236,7 +1332,7 @@ async def cb_create_shortcut_final(query: types.CallbackQuery, state: FSMContext
         if result:
             await query.answer("✅ Шорткат создан!", show_alert=True)
             await state.update_data(shortcut_mode=None, shortcut_step=None, shortcut_command=None, shortcut_instruction=None)
-            await shortcuts_command(query.message, state)
+            await shortcuts_edit_answer(query.message, state, query.from_user.id)
         else:
             await query.answer("❌ Ошибка при создании шортката", show_alert=True)
     except Exception as e:
@@ -1484,7 +1580,14 @@ async def message_router(message: types.Message, state: FSMContext):
                     
                     await state.update_data(shortcut_command=command)
                     await state.update_data(shortcut_step="instruction")
-                    await message.answer("Введите инструкцию для шортката:")
+                    rows = [
+                        [
+                             InlineKeyboardButton(text="↩️ Назад", callback_data=f"shortcut-back")
+                        ]
+                    ]
+                    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+                    await message.answer("Введите инструкцию для шортката:", parse_mode=ParseMode.HTML, reply_markup=kb)
+                    
                     return
                 elif shortcut_step == "instruction":
                     command = data.get("shortcut_command")
@@ -1638,23 +1741,18 @@ async def message_router(message: types.Message, state: FSMContext):
                         actual_chat_id = data.get("active_chat")
                         if response_chat_id != actual_chat_id:
                             try:
-                                chats = await fetch_chats(message.from_user.id)
+                                selected = await fetch_chat(message.from_user.id,response_chat_id)
                             except Exception as e:
                                 await message.answer(
                                     f"Не удалось получить список чатов: {e}",
                                     show_alert=True,
                                 )
                                 return
-
-                            selected = next(
-                                (c for c in chats if c["id"] == response_chat_id), None
-                            )
                             chat_title = (
                                 selected.get("title")
                                 if selected and selected.get("title")
                                 else response_chat_id[:8]
                             )
-
                             chat: types.Chat = await bot.get_chat(message.chat.id)
                             pinned: types.Message | None = chat.pinned_message
 
@@ -1750,7 +1848,7 @@ async def message_router(message: types.Message, state: FSMContext):
                         actual_chat_id = data.get("active_chat")
                         if response_chat_id != actual_chat_id:
                             try:
-                                chats = await fetch_chats(message.from_user.id)
+                                selected = await fetch_chat(message.from_user.id,response_chat_id)
                             except Exception as e:
                                 await message.answer(
                                     f"Не удалось получить список чатов: {e}",
@@ -1758,9 +1856,6 @@ async def message_router(message: types.Message, state: FSMContext):
                                 )
                                 return
 
-                            selected = next(
-                                (c for c in chats if c["id"] == response_chat_id), None
-                            )
                             chat_title = (
                                 selected.get("title")
                                 if selected and selected.get("title")
@@ -1815,31 +1910,38 @@ async def message_router(message: types.Message, state: FSMContext):
                             raw_visible, think_text = extract_and_strip_think(raw)
                             clean = markdownify(raw_visible)
                             final_text = clean[:4096]
-                            if not is_blank_simple(think_text):
-                                try:
-                                    byte_text = make_final_text_by_truncating_hidden(
-                                        think_text, max_len=4096
-                                    )
-                                except ValueError:
-                                    print("bad")
+                        if not is_blank_simple(think_text):
+                            try:
+                                available_space = 4096 - len(final_text)
+
+                                hidden_part = make_final_text_by_truncating_hidden(
+                                    think_text, max_len=available_space 
+                                )
+
+                                text_to_send = final_text + hidden_part
+
                                 kb = toggle_think_buttons(
                                     InlineKeyboardMarkup(inline_keyboard=[]), show=False
                                 )
                                 await target.delete()
                                 await message.answer(
-                                    text=byte_text,
+                                    text=text_to_send,
                                     reply_markup=kb,
                                 )
-                                await message.reply(
-                                    final_text,
-                                    parse_mode=ParseMode.MARKDOWN_V2,
-                                )
-                            else:
-                                final_text = clean
+                            except TelegramForbiddenError:
+                                print(f"USER BLOCKED THE BOT! User ID: {message.from_user.id}")
+                            except ValueError as e:
+                                print(f"ERROR: Could not create hidden payload. Reason: {e}. Sending visible part only.")
+
                                 await target.delete()
                                 await message.reply(
                                     final_text, parse_mode=ParseMode.MARKDOWN_V2
                                 )
+                        else:
+                            await target.delete()
+                            await message.reply(
+                                final_text, parse_mode=ParseMode.MARKDOWN_V2
+                            )
                     except Exception as e:
                         await target.delete()
                         await message.answer(

@@ -24,6 +24,7 @@ export class SubscriptionsService {
         telegramPaymentId: dto.telegramPaymentId,
         providerPaymentId: dto.providerPaymentId,
         kind: 'PAID',
+        plan: 'PRO',
       },
     });
 
@@ -68,6 +69,7 @@ export class SubscriptionsService {
           status: 'ACTIVE',
           validUntil: validUntil,
           kind: 'TRIAL',
+          plan: 'PRO',
         },
       });
 

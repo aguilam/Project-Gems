@@ -137,7 +137,6 @@ class LLMRequest(BaseModel):
     prompt: List[ChatMessage]
     model: str
     provider: list
-    premium: bool
     is_agent: bool = False
 
 

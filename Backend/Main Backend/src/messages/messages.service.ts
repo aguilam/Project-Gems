@@ -137,7 +137,7 @@ export class MessagesService {
 
       let chat;
       if (dto.chatId && !(dto.chatId == '0')) {
-        chat = await this.chatsService.getChatById(dto.chatId);
+        chat = await this.chatsService.getChatById(dto.chatId, user.telegramId);
         if (!chat || chat == null) {
           throw new NotFoundException(
             'Чат не найден, попробуйте выбрать другой',
@@ -181,7 +181,6 @@ export class MessagesService {
             ],
             model: 'llama3.3-70b',
             provider: ['cerebras'],
-            premium: true,
             is_agent: false,
           },
           {
@@ -218,8 +217,7 @@ export class MessagesService {
             prompt: previousMessages,
             model: model.systemName,
             provider: model.provider,
-            premium: true,
-            is_agent: userSubscriber,
+            is_agent: userSubscriber ? true : false,
           },
           {
             headers: {
