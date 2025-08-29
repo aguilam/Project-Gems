@@ -1541,11 +1541,26 @@ async def message_router(message: types.Message, state: FSMContext):
     payload = None
     form_data = None
 
+    # защита: флаг блокировки
     if data.get("is_locked") == True:
         await message.answer("Дождитесь пожалуйста ответа модели")
         return
+
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     chat_id = data.get("active_chat", "0")
+
+    # гарантируем наличие переменной target (сообщение-заглушка "думания")
+    target = None
+
+    # вспомогательная безопасная функция удаления индикатора "Нейросеть думает"
+    async def safe_delete_target(t):
+        if not t:
+            return
+        try:
+            await t.delete()
+        except Exception:
+            # игнорируем ошибки удаления
+            pass
 
     if message.text is not None and message.text not in forbidden_commands:
         if mode == "edit" and edit_target:
@@ -1565,105 +1580,130 @@ async def message_router(message: types.Message, state: FSMContext):
             await message.answer("✅ Ваш системный промпт сохранён")
             await show_roles_menu(message, state)
             return
-            
+
         shortcut_mode = data.get("shortcut_mode")
         if shortcut_mode in ["create", "edit"]:
             shortcut_step = data.get("shortcut_step")
             shortcut_id = data.get("shortcut_id")
-            
+
             if shortcut_mode == "create":
                 if shortcut_step == "command":
                     command = message.text.strip()
                     if not command.startswith("/"):
                         command = "/" + command
-                    
+
                     await state.update_data(shortcut_command=command)
                     await state.update_data(shortcut_step="instruction")
+                    # при создании кнопка "Назад" ведёт в общий список шорткатов
                     rows = [
                         [
-                             InlineKeyboardButton(text="↩️ Назад", callback_data=f"shortcut-back")
+                            InlineKeyboardButton(
+                                text="↩️ Назад", callback_data=f"shortcut-back"
+                            )
                         ]
                     ]
                     kb = InlineKeyboardMarkup(inline_keyboard=rows)
-                    await message.answer("Введите инструкцию для шортката:", parse_mode=ParseMode.HTML, reply_markup=kb)
-                    
+                    await message.answer(
+                        "Введите инструкцию для шортката:",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=kb,
+                    )
+
                     return
                 elif shortcut_step == "instruction":
                     command = data.get("shortcut_command")
                     instruction = message.text.strip()
-                    
+
                     models = await fetch_models()
                     user = await fetch_user(message.from_user.id)
                     user_premium = is_user_premium(user)
-                    
+
                     buttons: list[InlineKeyboardButton] = []
                     for m in models:
                         model_name = m["name"]
                         icons = ""
                         if m.get("premium", False) and not user_premium:
                             icons = f"🔒{icons}"
-                            continue 
+                            continue
                         if "reasoning" in m["tags"]:
                             icons = f"🧠{icons}"
                         if "image" in m["tags"]:
                             icons = f"🖼️{icons}"
                         if m["premium"] == True:
                             icons = f"⭐ {icons}"
-                        
+
                         label = f"{icons} {model_name}"
                         buttons.append(
                             InlineKeyboardButton(
-                                text=label, 
-                                callback_data=f"shortcut-create_model_{m['id']}"
+                                text=label,
+                                callback_data=f"shortcut-create_model_{m['id']}",
                             )
                         )
-                    
+
                     rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
-                    rows.append([InlineKeyboardButton(text="↩️Отмена", callback_data="shortcut-back")])
+                    rows.append(
+                        [InlineKeyboardButton(text="↩️Отмена", callback_data="shortcut-back")]
+                    )
                     kb = InlineKeyboardMarkup(inline_keyboard=rows)
-                    
-                    await state.update_data(shortcut_command=command, shortcut_instruction=instruction)
-                    
+
+                    await state.update_data(
+                        shortcut_command=command, shortcut_instruction=instruction
+                    )
+
                     await message.answer(
                         "Выберите модель для шортката:",
                         reply_markup=kb,
-                        parse_mode=ParseMode.HTML
+                        parse_mode=ParseMode.HTML,
                     )
                     return
-                    
+
             elif shortcut_mode == "edit":
                 if shortcut_step == "command":
                     command = message.text.strip()
                     if not command.startswith("/"):
                         command = "/" + command
-                    
+
                     try:
                         await patch_shortcuts(shortcut_id, {"command": command})
                         await message.answer("✅ Команда обновлена")
-                        await state.update_data(shortcut_mode=None, shortcut_step=None, shortcut_id=None)
+                        await state.update_data(
+                            shortcut_mode=None, shortcut_step=None, shortcut_id=None
+                        )
                         await shortcuts_command(message, state)
                     except Exception as e:
                         await message.answer(f"❌ Ошибка: {e}")
                     return
                 elif shortcut_step == "instruction":
                     try:
-                        await patch_shortcuts(shortcut_id, {"instruction": message.text.strip()})
+                        await patch_shortcuts(
+                            shortcut_id, {"instruction": message.text.strip()}
+                        )
                         await message.answer("✅ Инструкция обновлена")
-                        await state.update_data(shortcut_mode=None, shortcut_step=None, shortcut_id=None)
+                        await state.update_data(
+                            shortcut_mode=None, shortcut_step=None, shortcut_id=None
+                        )
                         await shortcuts_command(message, state)
                     except Exception as e:
                         await message.answer(f"❌ Ошибка: {e}")
                     return
-        payload = {
-            "telegramId": message.from_user.id,
-            "prompt": message.text,
-        }
+
+        payload = {"telegramId": message.from_user.id, "prompt": message.text}
         if chat_id:
             payload["chatId"] = chat_id
         await state.update_data(is_locked=True)
-        target = await message.answer(
-            "Нейросеть думает🤔", parse_mode=ParseMode.MARKDOWN_V2
-        )
+
+        # создаём индикатор только здесь (гарантированно)
+        try:
+            target = await message.answer(
+                "Нейросеть думает🤔", parse_mode=ParseMode.MARKDOWN_V2
+            )
+        except Exception:
+            # fallback
+            try:
+                target = await message.reply("Нейросеть думает🤔")
+            except Exception:
+                target = None
+
     if message.photo:
         photo: types.PhotoSize = message.photo[-1]
 
@@ -1683,6 +1723,18 @@ async def message_router(message: types.Message, state: FSMContext):
         }
         if chat_id:
             payload["chatId"] = chat_id
+        # если мы ещё не создали target — создаём его
+        if target is None:
+            try:
+                target = await message.answer(
+                    "Нейросеть думает🤔", parse_mode=ParseMode.MARKDOWN_V2
+                )
+            except Exception:
+                try:
+                    target = await message.reply("Нейросеть думает🤔")
+                except Exception:
+                    target = None
+
     if (
         (
             message.document
@@ -1720,6 +1772,7 @@ async def message_router(message: types.Message, state: FSMContext):
             filename=filename,
             content_type=content_type,
         )
+
     async with aiohttp.ClientSession() as session:
         try:
             if isinstance(form_data, aiohttp.FormData):
@@ -1740,7 +1793,9 @@ async def message_router(message: types.Message, state: FSMContext):
                         actual_chat_id = data.get("active_chat")
                         if response_chat_id != actual_chat_id:
                             try:
-                                selected = await fetch_chat(message.from_user.id,response_chat_id)
+                                selected = await fetch_chat(
+                                    message.from_user.id, response_chat_id
+                                )
                             except Exception as e:
                                 await message.answer(
                                     f"Не удалось получить список чатов: {e}",
@@ -1755,9 +1810,6 @@ async def message_router(message: types.Message, state: FSMContext):
                             chat: types.Chat = await bot.get_chat(message.chat.id)
                             pinned: types.Message | None = chat.pinned_message
 
-                            # if not pinned:
-                            #    return await query.message.reply("В чате нет закреплённого сообщения.")
-
                             original = pinned.text or pinned.caption or ""
                             if "|" not in original:
                                 new_text = f"{original} | 💭{chat_title}"
@@ -1768,8 +1820,10 @@ async def message_router(message: types.Message, state: FSMContext):
                                         chat_id=message.chat.id,
                                         message_id=pinned.message_id,
                                     )
+                                    await safe_delete_target(target)
                                     return
-                                except Exception as e:
+                                except Exception:
+                                    await safe_delete_target(target)
                                     return "bad"
                             else:
                                 base = original.split("|", 1)[0]
@@ -1781,8 +1835,9 @@ async def message_router(message: types.Message, state: FSMContext):
                                         chat_id=message.chat.id,
                                         message_id=pinned.message_id,
                                     )
-                                except Exception as e:
-                                    return print(e)
+                                    await safe_delete_target(target)
+                                except Exception:
+                                    await safe_delete_target(target)
                         await state.update_data(active_chat=response_chat_id)
                         raw = result.get("content", "")
 
@@ -1806,27 +1861,21 @@ async def message_router(message: types.Message, state: FSMContext):
                                         think_text, max_len=4096
                                     )
                                 except ValueError:
-                                    print("bad")
+                                    pass
                                 kb = toggle_think_buttons(
                                     InlineKeyboardMarkup(inline_keyboard=[]), show=False
                                 )
-                                await target.delete()
-                                await message.answer(
-                                    text=byte_text,
-                                    reply_markup=kb,
-                                )
-                                await message.reply(
-                                    final_text,
-                                    parse_mode=ParseMode.MARKDOWN_V2,
-                                )
+                                await safe_delete_target(target)
+                                await message.answer(text=byte_text, reply_markup=kb)
+                                await message.reply(final_text, parse_mode=ParseMode.MARKDOWN_V2)
                             else:
                                 final_text = clean
-                                await target.delete()
+                                await safe_delete_target(target)
                                 await message.reply(
                                     final_text, parse_mode=ParseMode.MARKDOWN_V2
                                 )
                     except Exception as e:
-                        await target.delete()
+                        await safe_delete_target(target)
                         await message.answer(
                             f"Ошибка обработки ответа: {e}. Попробуйте позже."
                         )
@@ -1843,12 +1892,17 @@ async def message_router(message: types.Message, state: FSMContext):
 
                     try:
                         result = await resp.json()
-                        logging.info("result GET %s -> %s", result)
+
+                        # безопасное логирование результата
+                        logging.info("result: %s", result)
+
                         response_chat_id = result.get("chatId", "0")
                         actual_chat_id = data.get("active_chat")
                         if response_chat_id != actual_chat_id:
                             try:
-                                selected = await fetch_chat(message.from_user.id,response_chat_id)
+                                selected = await fetch_chat(
+                                    message.from_user.id, response_chat_id
+                                )
                             except Exception as e:
                                 await message.answer(
                                     f"Не удалось получить список чатов: {e}",
@@ -1865,9 +1919,6 @@ async def message_router(message: types.Message, state: FSMContext):
                             chat: types.Chat = await bot.get_chat(message.chat.id)
                             pinned: types.Message | None = chat.pinned_message
 
-                            # if not pinned:
-                            #    return await query.message.reply("В чате нет закреплённого сообщения.")
-
                             original = pinned.text or pinned.caption or ""
                             if "|" not in original:
                                 new_text = f"{original} | 💭{chat_title}"
@@ -1878,8 +1929,10 @@ async def message_router(message: types.Message, state: FSMContext):
                                         chat_id=message.chat.id,
                                         message_id=pinned.message_id,
                                     )
+                                    await safe_delete_target(target)
                                     return
-                                except Exception as e:
+                                except Exception:
+                                    await safe_delete_target(target)
                                     return "bad"
                             else:
                                 base = original.split("|", 1)[0]
@@ -1891,8 +1944,9 @@ async def message_router(message: types.Message, state: FSMContext):
                                         chat_id=message.chat.id,
                                         message_id=pinned.message_id,
                                     )
-                                except Exception as e:
-                                    return print(e)
+                                    await safe_delete_target(target)
+                                except Exception:
+                                    await safe_delete_target(target)
                         await state.update_data(active_chat=response_chat_id)
                         raw = result.get("content", "")
 
@@ -1916,35 +1970,31 @@ async def message_router(message: types.Message, state: FSMContext):
                                         think_text, max_len=4096
                                     )
                                 except ValueError:
-                                    print("bad")
+                                    pass
                                 kb = toggle_think_buttons(
                                     InlineKeyboardMarkup(inline_keyboard=[]), show=False
                                 )
-                                await target.delete()
-                                await message.answer(
-                                    text=byte_text,
-                                    reply_markup=kb,
-                                )
-                                await message.reply(
-                                    final_text,
-                                    parse_mode=ParseMode.MARKDOWN_V2,
-                                )
+                                await safe_delete_target(target)
+                                await message.answer(text=byte_text, reply_markup=kb)
+                                await message.reply(final_text, parse_mode=ParseMode.MARKDOWN_V2)
                             else:
                                 final_text = clean
-                                await target.delete()
+                                await safe_delete_target(target)
                                 await message.reply(
                                     final_text, parse_mode=ParseMode.MARKDOWN_V2
                                 )
                     except Exception as e:
-                        await target.delete()
+                        await safe_delete_target(target)
                         await message.answer(
                             f"Ошибка обработки ответа: {e}. Попробуйте позже."
                         )
         except ClientError as e:
-            await target.delete()
+            await safe_delete_target(target)
             await message.answer(f"Сетевая ошибка: {e}")
         finally:
+            # всегда сбрасываем блокировку
             await state.update_data(is_locked=False)
+
 
 
 _ZW_MARKER = "\u2063\u2063\u2063"
