@@ -137,7 +137,7 @@ export class MessagesService {
 
       let chat;
       if (dto.chatId && !(dto.chatId == '0')) {
-        chat = await this.chatsService.getChatById(dto.chatId, user.telegramId);
+        chat = await this.chatsService.getChatById(user.telegramId, dto.chatId);
         if (!chat || chat == null) {
           throw new NotFoundException(
             'Чат не найден, попробуйте выбрать другой',
