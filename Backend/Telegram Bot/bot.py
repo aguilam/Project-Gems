@@ -1807,37 +1807,57 @@ async def message_router(message: types.Message, state: FSMContext):
                                 if selected and selected.get("title")
                                 else response_chat_id[:8]
                             )
-                            chat: types.Chat = await bot.get_chat(message.chat.id)
-                            pinned: types.Message | None = chat.pinned_message
 
-                            original = pinned.text or pinned.caption or ""
+                            # безопасно получаем pinned_message
+                            try:
+                                chat: types.Chat = await bot.get_chat(message.chat.id)
+                                pinned: types.Message | None = getattr(chat, "pinned_message", None)
+                            except Exception as e:
+                                logging.warning("Не удалось получить чат/закреплённое сообщение: %s", e)
+                                pinned = None
+
+                            original = ""
+                            if pinned is not None:
+                                original = getattr(pinned, "text", None) or getattr(pinned, "caption", None) or ""
+
                             if "|" not in original:
                                 new_text = f"{original} | 💭{chat_title}"
 
-                                try:
-                                    await bot.edit_message_text(
-                                        text=new_text,
-                                        chat_id=message.chat.id,
-                                        message_id=pinned.message_id,
-                                    )
+                                # редактируем только если есть pinned.message_id
+                                if pinned and getattr(pinned, "message_id", None):
+                                    try:
+                                        await bot.edit_message_text(
+                                            text=new_text,
+                                            chat_id=message.chat.id,
+                                            message_id=pinned.message_id,
+                                        )
+                                        await safe_delete_target(target)
+                                        return
+                                    except Exception:
+                                        await safe_delete_target(target)
+                                        return "bad"
+                                else:
+                                    logging.info("Нет pinned.message_id — пропускаем редактирование заголовка.")
                                     await safe_delete_target(target)
                                     return
-                                except Exception:
-                                    await safe_delete_target(target)
-                                    return "bad"
                             else:
                                 base = original.split("|", 1)[0]
                                 new_text = f"{base}| 💭{chat_title}"
 
-                                try:
-                                    await bot.edit_message_text(
-                                        text=new_text,
-                                        chat_id=message.chat.id,
-                                        message_id=pinned.message_id,
-                                    )
+                                if pinned and getattr(pinned, "message_id", None):
+                                    try:
+                                        await bot.edit_message_text(
+                                            text=new_text,
+                                            chat_id=message.chat.id,
+                                            message_id=pinned.message_id,
+                                        )
+                                        await safe_delete_target(target)
+                                    except Exception:
+                                        await safe_delete_target(target)
+                                else:
+                                    logging.info("Нет pinned.message_id — пропускаем редактирование заголовка.")
                                     await safe_delete_target(target)
-                                except Exception:
-                                    await safe_delete_target(target)
+
                         await state.update_data(active_chat=response_chat_id)
                         raw = result.get("content", "")
 
@@ -1916,36 +1936,53 @@ async def message_router(message: types.Message, state: FSMContext):
                                 else response_chat_id[:8]
                             )
 
-                            chat: types.Chat = await bot.get_chat(message.chat.id)
-                            pinned: types.Message | None = chat.pinned_message
+                            # безопасно получаем pinned_message
+                            try:
+                                chat: types.Chat = await bot.get_chat(message.chat.id)
+                                pinned: types.Message | None = getattr(chat, "pinned_message", None)
+                            except Exception as e:
+                                logging.warning("Не удалось получить чат/закреплённое сообщение: %s", e)
+                                pinned = None
 
-                            original = pinned.text or pinned.caption or ""
+                            original = ""
+                            if pinned is not None:
+                                original = getattr(pinned, "text", None) or getattr(pinned, "caption", None) or ""
+
                             if "|" not in original:
                                 new_text = f"{original} | 💭{chat_title}"
 
-                                try:
-                                    await bot.edit_message_text(
-                                        text=new_text,
-                                        chat_id=message.chat.id,
-                                        message_id=pinned.message_id,
-                                    )
+                                if pinned and getattr(pinned, "message_id", None):
+                                    try:
+                                        await bot.edit_message_text(
+                                            text=new_text,
+                                            chat_id=message.chat.id,
+                                            message_id=pinned.message_id,
+                                        )
+                                        await safe_delete_target(target)
+                                        return
+                                    except Exception:
+                                        await safe_delete_target(target)
+                                        return "bad"
+                                else:
+                                    logging.info("Нет pinned.message_id — пропускаем редактирование заголовка.")
                                     await safe_delete_target(target)
                                     return
-                                except Exception:
-                                    await safe_delete_target(target)
-                                    return "bad"
                             else:
                                 base = original.split("|", 1)[0]
                                 new_text = f"{base}| 💭{chat_title}"
 
-                                try:
-                                    await bot.edit_message_text(
-                                        text=new_text,
-                                        chat_id=message.chat.id,
-                                        message_id=pinned.message_id,
-                                    )
-                                    await safe_delete_target(target)
-                                except Exception:
+                                if pinned and getattr(pinned, "message_id", None):
+                                    try:
+                                        await bot.edit_message_text(
+                                            text=new_text,
+                                            chat_id=message.chat.id,
+                                            message_id=pinned.message_id,
+                                        )
+                                        await safe_delete_target(target)
+                                    except Exception:
+                                        await safe_delete_target(target)
+                                else:
+                                    logging.info("Нет pinned.message_id — пропускаем редактирование заголовка.")
                                     await safe_delete_target(target)
                         await state.update_data(active_chat=response_chat_id)
                         raw = result.get("content", "")
@@ -1994,6 +2031,7 @@ async def message_router(message: types.Message, state: FSMContext):
         finally:
             # всегда сбрасываем блокировку
             await state.update_data(is_locked=False)
+
 
 
 
