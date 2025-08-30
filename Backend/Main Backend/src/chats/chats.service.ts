@@ -42,8 +42,9 @@ export class ChatsService {
     const take = 10;
     const chats = await this.prisma.chat.findMany({
       where: { users: { some: { telegramId } } },
-      skip: (page - 1) * 10,
+      skip: (page - 1) * take,
       take: take,
+      orderBy: { updatedAt: 'desc' },
     });
     const countUserChats = await this.prisma.chat.count({
       where: { users: { some: { telegramId } } },

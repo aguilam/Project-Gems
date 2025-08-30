@@ -499,13 +499,16 @@ async def show_chats_menu(target, state: FSMContext, mode: str = None):
         return
 
     rows: list[list[InlineKeyboardButton]] = []
-    if(pages_count <= chat_page):
-        rows.append([InlineKeyboardButton(text="⬅️", callback_data="chat:prev"), InlineKeyboardButton(text=f"{chat_page} / {pages_count}", callback_data="mode:new")])
-    elif(chat_page <= 1):
+    if(chat_page >= 2 and pages_count > chat_page ):
+        rows.append([InlineKeyboardButton(text="⬅️", callback_data="chat:prev"), InlineKeyboardButton(text=f"{chat_page} / {pages_count}", callback_data="de") ,  InlineKeyboardButton(text="➡️", callback_data="chat:next")])
+    elif(pages_count <= chat_page and chat_page != 1):
+        rows.append([InlineKeyboardButton(text="⬅️", callback_data="chat:prev"), InlineKeyboardButton(text=f"{chat_page} / {pages_count}", callback_data="de")])
+    elif(chat_page <= 1 and pages_count != 1):
         rows.append([InlineKeyboardButton(text=f"{chat_page} / {pages_count}", callback_data="de") ,  InlineKeyboardButton(text="➡️", callback_data="chat:next")])
     else:
-        rows.append([InlineKeyboardButton(text="⬅️", callback_data="chat:prev"), InlineKeyboardButton(text=f"{chat_page} / {pages_count}", callback_data="mode:new") ,  InlineKeyboardButton(text="➡️", callback_data="chat:next")])
+        rows.append([InlineKeyboardButton(text=f"{chat_page} / {pages_count}", callback_data="de")])
     rows.append([InlineKeyboardButton(text="➕ Новый чат", callback_data="mode:new")])
+
     for chat in chats:
         label = chat.get("title") or chat["id"][:8]
 
@@ -615,38 +618,47 @@ async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
             selected.get("title") if selected and selected.get("title") else chat_id[:8]
         )
 
-        chat: types.Chat = await bot.get_chat(query.message.chat.id)
-        pinned: types.Message | None = chat.pinned_message
+        try:
+            chat: types.Chat = await bot.get_chat(query.message.chat.id)
+            pinned: types.Message | None = getattr(chat, "pinned_message", None)
+        except Exception as e:
+            logging.warning("Не удалось получить чат/закреплённое сообщение: %s", e)
+            pinned = None
 
-        # if not pinned:
-        #    return await query.message.reply("В чате нет закреплённого сообщения.")
-
-        original = pinned.text or pinned.caption or ""
+        original = ""
+        if pinned is not None:
+            original = getattr(pinned, "text", None) or getattr(pinned, "caption", None) or ""
         if "|" not in original:
             new_text = f"{original} | 💭{chat_title}"
 
-            try:
-                await bot.edit_message_text(
-                    text=new_text,
-                    chat_id=query.message.chat.id,
-                    message_id=pinned.message_id,
-                )
+            if pinned and getattr(pinned, "message_id", None):
+                try:
+                    await bot.edit_message_text(
+                        text=new_text,
+                        chat_id=query.message.chat.id,
+                        message_id=pinned.message_id,
+                    )
+                    return
+                except Exception as e:
+                    return "bad"
+            else:
+                logging.info("Нет pinned.message_id — пропускаем редактирование заголовка.")
                 return
-            except Exception as e:
-                return "bad"
         else:
             base = original.split("|", 1)[0]
             new_text = f"{base}| 💭{chat_title}"
 
-            try:
-                await bot.edit_message_text(
-                    text=new_text,
-                    chat_id=query.message.chat.id,
-                    message_id=pinned.message_id,
-                )
-            except Exception as e:
-                return print(e)
-
+            if pinned and getattr(pinned, "message_id", None):
+                try:
+                    await bot.edit_message_text(
+                        text=new_text,
+                        chat_id=query.message.chat.id,
+                        message_id=pinned.message_id,
+                    )
+                except Exception as e:
+                    return print(e)
+            else:
+                logging.info("Нет pinned.message_id — пропускаем редактирование заголовка.")
         await state.update_data(active_chat=chat_id)
         await query.answer(f"✅ Активный чат: {chat_id}")
 
@@ -1354,7 +1366,7 @@ async def on_model_selected(callback: CallbackQuery):
     await callback.message.edit_reply_markup(reply_markup=kb)
     chat = await bot.get_chat(chat_id)
     pinned = chat.pinned_message
-    original = pinned.text or pinned.caption or ""
+    original = (pinned.text or pinned.caption) if pinned else ""
     if not pinned:
         message_to_pin = await callback.bot.send_message(
             chat_id=chat_id, text=f"📝{model_title}"
@@ -1541,25 +1553,20 @@ async def message_router(message: types.Message, state: FSMContext):
     payload = None
     form_data = None
 
-    # защита: флаг блокировки
     if data.get("is_locked") == True:
         await message.answer("Дождитесь пожалуйста ответа модели")
         return
 
-    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     chat_id = data.get("active_chat", "0")
 
-    # гарантируем наличие переменной target (сообщение-заглушка "думания")
     target = None
 
-    # вспомогательная безопасная функция удаления индикатора "Нейросеть думает"
     async def safe_delete_target(t):
         if not t:
             return
         try:
             await t.delete()
         except Exception:
-            # игнорируем ошибки удаления
             pass
 
     if message.text is not None and message.text not in forbidden_commands:
@@ -1594,7 +1601,6 @@ async def message_router(message: types.Message, state: FSMContext):
 
                     await state.update_data(shortcut_command=command)
                     await state.update_data(shortcut_step="instruction")
-                    # при создании кнопка "Назад" ведёт в общий список шорткатов
                     rows = [
                         [
                             InlineKeyboardButton(
@@ -1692,17 +1698,16 @@ async def message_router(message: types.Message, state: FSMContext):
             payload["chatId"] = chat_id
         await state.update_data(is_locked=True)
 
-        # создаём индикатор только здесь (гарантированно)
         try:
             target = await message.answer(
                 "Нейросеть думает🤔", parse_mode=ParseMode.MARKDOWN_V2
             )
         except Exception:
-            # fallback
             try:
                 target = await message.reply("Нейросеть думает🤔")
             except Exception:
                 target = None
+        await bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
     if message.photo:
         photo: types.PhotoSize = message.photo[-1]
@@ -1723,7 +1728,6 @@ async def message_router(message: types.Message, state: FSMContext):
         }
         if chat_id:
             payload["chatId"] = chat_id
-        # если мы ещё не создали target — создаём его
         if target is None:
             try:
                 target = await message.answer(
@@ -1734,6 +1738,7 @@ async def message_router(message: types.Message, state: FSMContext):
                     target = await message.reply("Нейросеть думает🤔")
                 except Exception:
                     target = None
+        await bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
     if (
         (
@@ -1808,7 +1813,6 @@ async def message_router(message: types.Message, state: FSMContext):
                                 else response_chat_id[:8]
                             )
 
-                            # безопасно получаем pinned_message
                             try:
                                 chat: types.Chat = await bot.get_chat(message.chat.id)
                                 pinned: types.Message | None = getattr(chat, "pinned_message", None)
@@ -1823,7 +1827,6 @@ async def message_router(message: types.Message, state: FSMContext):
                             if "|" not in original:
                                 new_text = f"{original} | 💭{chat_title}"
 
-                                # редактируем только если есть pinned.message_id
                                 if pinned and getattr(pinned, "message_id", None):
                                     try:
                                         await bot.edit_message_text(
@@ -1913,7 +1916,6 @@ async def message_router(message: types.Message, state: FSMContext):
                     try:
                         result = await resp.json()
 
-                        # безопасное логирование результата
                         logging.info("result: %s", result)
 
                         response_chat_id = result.get("chatId", "0")
@@ -1936,7 +1938,6 @@ async def message_router(message: types.Message, state: FSMContext):
                                 else response_chat_id[:8]
                             )
 
-                            # безопасно получаем pinned_message
                             try:
                                 chat: types.Chat = await bot.get_chat(message.chat.id)
                                 pinned: types.Message | None = getattr(chat, "pinned_message", None)
@@ -2029,7 +2030,6 @@ async def message_router(message: types.Message, state: FSMContext):
             await safe_delete_target(target)
             await message.answer(f"Сетевая ошибка: {e}")
         finally:
-            # всегда сбрасываем блокировку
             await state.update_data(is_locked=False)
 
 
