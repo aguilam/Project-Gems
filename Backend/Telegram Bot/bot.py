@@ -64,6 +64,80 @@ async def _start_health_server(port: int) -> web.AppRunner:
     return runner
 
 
+async def change_pin(chat_id, model_title, chat_name, bot):
+    try:
+        chat: types.Chat = await bot.get_chat(chat_id)
+        pinned: types.Message | None = getattr(chat, "pinned_message", None)
+    except Exception as e:
+        logging.warning("Не удалось получить чат/закреплённое сообщение: %s", e)
+        pinned = None
+    original = ""
+    if pinned:
+        original = (
+            getattr(pinned, "text", None) or getattr(pinned, "caption", None) or ""
+        ).strip()
+    if not pinned:
+        if model_title is not None:
+            message_to_pin = await bot.send_message(
+                chat_id=chat_id, text=f"📝{model_title}"
+            )
+            await bot.pin_chat_message(
+                chat_id=chat_id,
+                message_id=message_to_pin.message_id,
+                disable_notification=True,
+            )
+        elif chat_name is not None:
+            message_to_pin = await bot.send_message(
+                chat_id=chat_id, text=f"💭{chat_name}"
+            )
+            await bot.pin_chat_message(
+                chat_id=chat_id,
+                message_id=message_to_pin.message_id,
+                disable_notification=True,
+            )
+    else:
+        if "|" in original:
+            if chat_name is not None:
+                first_part = original.split("|", 1)[0].strip()
+                try:
+                    await bot.edit_message_text(
+                        text=f"{first_part} | 💭{chat_name}",
+                        chat_id=chat_id,
+                        message_id=pinned.message_id,
+                    )
+                    return
+                except Exception:
+                    return "bad"
+            elif model_title is not None:
+                first_part = original.split("|", 1)[1].strip()
+                await bot.edit_message_text(
+                    text=f"📝{model_title} | {first_part}",
+                    chat_id=chat_id,
+                    message_id=pinned.message_id,
+                )
+        elif "|" not in original:
+            if chat_name is not None:
+                try:
+                    await bot.edit_message_text(
+                        text=f"{original} | 💭{chat_name}",
+                        chat_id=chat_id,
+                        message_id=pinned.message_id,
+                    )
+                    return
+                except Exception:
+                    return "bad"
+            elif model_title is not None:
+                try:
+                    await bot.edit_message_text(
+                        text=f"📝{model_title} | {original}",
+                        chat_id=chat_id,
+                        message_id=pinned.message_id,
+                    )
+                    return
+                except Exception:
+                    return "bad"
+
+
 async def _shutdown_health_server(runner: web.AppRunner):
     try:
         await runner.cleanup()
@@ -188,14 +262,7 @@ async def cmd_start(message: types.Message):
                 user_model = user["defaultModel"]
                 model_name = user_model["name"]
                 user_existing = response["existing"]
-                message_to_pin = await message.bot.send_message(
-                    chat_id=chat_id, text=f"📝{model_name}"
-                )
-                await bot.pin_chat_message(
-                    chat_id=chat_id,
-                    message_id=message_to_pin.message_id,
-                    disable_notification=True,
-                )
+                await change_pin(chat_id, model_name, None, message.bot)
                 if user_existing == False:
                     await message.bot.send_message(
                         chat_id=chat_id,
@@ -234,11 +301,15 @@ async def on_activate_trial(query: CallbackQuery):
     await query.answer(text="Активирую...", show_alert=False)
     await success_trial_handler(query.from_user.id, query.message.chat.id)
 
+
 async def success_trial_handler(user_telegram_id: int, chat_id: int):
     user = await fetch_user(user_telegram_id)
     backend_user_id = (user or {}).get("id")
     if not backend_user_id:
-        await bot.send_message(chat_id=chat_id, text="❗ Не удалось определить пользователя. Нажмите /start и попробуйте снова.")
+        await bot.send_message(
+            chat_id=chat_id,
+            text="❗ Не удалось определить пользователя. Нажмите /start и попробуйте снова.",
+        )
         return
     payment_info = {"userId": backend_user_id}
     try:
@@ -247,10 +318,17 @@ async def success_trial_handler(user_telegram_id: int, chat_id: int):
                 f"{API_URL}/subscriptions/trial", json=payment_info
             ) as resp:
                 resp.raise_for_status()
-        await bot.send_message(chat_id=chat_id, text="🥳 Спасибо! Подписка оформлена — вы получили доступ к Pro.")
+        await bot.send_message(
+            chat_id=chat_id,
+            text="🥳 Спасибо! Подписка оформлена — вы получили доступ к Pro.",
+        )
     except Exception as e:
         safe_error = str(e).replace("=", "\\=").replace("_", "\\_")
-        await bot.send_message(chat_id=chat_id, text=f"❗ Проблема при записи подписки: `{safe_error}`", parse_mode=ParseMode.MARKDOWN_V2)
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"❗ Проблема при записи подписки: `{safe_error}`",
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
 
 
 async def fetch_chats(telegram_id: int, chat_page: int) -> list:
@@ -282,6 +360,7 @@ async def fetch_chats(telegram_id: int, chat_page: int) -> list:
                 continue
     logging.error("fetch_chats failed after retries: %s", url)
     return []
+
 
 async def fetch_chat(telegram_id: int, chat_id: int) -> list:
     url = f"{API_URL}/chats/{chat_id}?telegramId={telegram_id}"
@@ -499,14 +578,34 @@ async def show_chats_menu(target, state: FSMContext, mode: str = None):
         return
 
     rows: list[list[InlineKeyboardButton]] = []
-    if(chat_page >= 2 and pages_count > chat_page ):
-        rows.append([InlineKeyboardButton(text="⬅️", callback_data="chat:prev"), InlineKeyboardButton(text=f"{chat_page} / {pages_count}", callback_data="de") ,  InlineKeyboardButton(text="➡️", callback_data="chat:next")])
-    elif(pages_count <= chat_page and chat_page != 1):
-        rows.append([InlineKeyboardButton(text="⬅️", callback_data="chat:prev"), InlineKeyboardButton(text=f"{chat_page} / {pages_count}", callback_data="de")])
-    elif(chat_page <= 1 and pages_count != 1):
-        rows.append([InlineKeyboardButton(text=f"{chat_page} / {pages_count}", callback_data="de") ,  InlineKeyboardButton(text="➡️", callback_data="chat:next")])
-    else:
-        rows.append([InlineKeyboardButton(text=f"{chat_page} / {pages_count}", callback_data="de")])
+    if chat_page >= 2 and pages_count > chat_page:
+        rows.append(
+            [
+                InlineKeyboardButton(text="⬅️", callback_data="chat:prev"),
+                InlineKeyboardButton(
+                    text=f"{chat_page} / {pages_count}", callback_data="de"
+                ),
+                InlineKeyboardButton(text="➡️", callback_data="chat:next"),
+            ]
+        )
+    elif pages_count <= chat_page and chat_page != 1:
+        rows.append(
+            [
+                InlineKeyboardButton(text="⬅️", callback_data="chat:prev"),
+                InlineKeyboardButton(
+                    text=f"{chat_page} / {pages_count}", callback_data="de"
+                ),
+            ]
+        )
+    elif chat_page <= 1 and pages_count != 1:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{chat_page} / {pages_count}", callback_data="de"
+                ),
+                InlineKeyboardButton(text="➡️", callback_data="chat:next"),
+            ]
+        )
     rows.append([InlineKeyboardButton(text="➕ Новый чат", callback_data="mode:new")])
 
     for chat in chats:
@@ -574,6 +673,7 @@ async def cb_mode(query: types.CallbackQuery, state: FSMContext):
         await show_chats_menu(query, state, mode=mode)
     await query.answer()
 
+
 @dp.callback_query(lambda c: c.data and c.data.startswith("chat:"))
 async def cb_mode(query: types.CallbackQuery, state: FSMContext):
     mode = query.data.split(":", 1)[1]
@@ -586,6 +686,8 @@ async def cb_mode(query: types.CallbackQuery, state: FSMContext):
         await state.update_data(chat_page=chat_page + 1)
         await show_chats_menu(query, state, mode=None)
     await query.answer()
+
+
 @dp.callback_query(lambda c: c.data and c.data.startswith("sel_"))
 async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
     chat_id = query.data.split("_", 1)[1]
@@ -613,52 +715,10 @@ async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
                 f"Не удалось получить список чатов: {e}", show_alert=True
             )
             return
-
         chat_title = (
             selected.get("title") if selected and selected.get("title") else chat_id[:8]
         )
-
-        try:
-            chat: types.Chat = await bot.get_chat(query.message.chat.id)
-            pinned: types.Message | None = getattr(chat, "pinned_message", None)
-        except Exception as e:
-            logging.warning("Не удалось получить чат/закреплённое сообщение: %s", e)
-            pinned = None
-
-        original = ""
-        if pinned is not None:
-            original = getattr(pinned, "text", None) or getattr(pinned, "caption", None) or ""
-        if "|" not in original:
-            new_text = f"{original} | 💭{chat_title}"
-
-            if pinned and getattr(pinned, "message_id", None):
-                try:
-                    await bot.edit_message_text(
-                        text=new_text,
-                        chat_id=query.message.chat.id,
-                        message_id=pinned.message_id,
-                    )
-                    return
-                except Exception as e:
-                    return "bad"
-            else:
-                logging.info("Нет pinned.message_id — пропускаем редактирование заголовка.")
-                return
-        else:
-            base = original.split("|", 1)[0]
-            new_text = f"{base}| 💭{chat_title}"
-
-            if pinned and getattr(pinned, "message_id", None):
-                try:
-                    await bot.edit_message_text(
-                        text=new_text,
-                        chat_id=query.message.chat.id,
-                        message_id=pinned.message_id,
-                    )
-                except Exception as e:
-                    return print(e)
-            else:
-                logging.info("Нет pinned.message_id — пропускаем редактирование заголовка.")
+        await change_pin(query.message.chat.id, None, chat_title, query.message.bot)
         await state.update_data(active_chat=chat_id)
         await query.answer(f"✅ Активный чат: {chat_id}")
 
@@ -768,7 +828,9 @@ def is_user_premium(user: dict) -> bool:
     subscriptions = user.get("subscription", [])
     if not subscriptions:
         return False
-    active_subscription = next((sub for sub in subscriptions if sub.get("status") == "ACTIVE"), None)
+    active_subscription = next(
+        (sub for sub in subscriptions if sub.get("status") == "ACTIVE"), None
+    )
     return active_subscription is not None
 
 
@@ -777,7 +839,7 @@ def build_keyboard(
 ) -> InlineKeyboardMarkup:
     buttons: list[InlineKeyboardButton] = []
     for m in models:
-        
+
         model_name = m["name"]
         icons = ""
         callback_data = f"model_select:{m['id']}"
@@ -974,7 +1036,7 @@ async def shortcuts_command(message: types.Message, state: FSMContext):
     except Exception as e:
         await message.answer(f"Не удалось получить список шорткатов: {e}")
         return
-    
+
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
@@ -995,6 +1057,7 @@ async def shortcuts_command(message: types.Message, state: FSMContext):
     text = "<b>Шорткаты — это быстрые шаблоны, чтобы не вводить одно и то же по сто раз.</b> \n\nПри использовании шортката его инструкция автоматически добавится в начало вашего запроса, а ответ придёт от выбранной вами модели. \n\nВыберите или создайте шорткат и ускорьте работу."
 
     await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
 
 async def fetch_shortcut(id: int) -> Optional[dict]:
     url = f"{API_URL}/shortcuts/{id}"
@@ -1058,8 +1121,12 @@ async def help_form(message: types.Message):
     if user_is_premium:
         try:
             subscriptions = user.get("subscription", [])
-            active_subscription = next((sub for sub in subscriptions if sub.get("status") == "ACTIVE"), None)
-            valid_until = active_subscription.get("validUntil") if active_subscription else None
+            active_subscription = next(
+                (sub for sub in subscriptions if sub.get("status") == "ACTIVE"), None
+            )
+            valid_until = (
+                active_subscription.get("validUntil") if active_subscription else None
+            )
             if valid_until:
                 subscription_expired = datetime.fromisoformat(valid_until)
                 subscription_expired_normalized_time = subscription_expired.strftime(
@@ -1130,11 +1197,7 @@ async def cb_select_shortcut(query: types.CallbackQuery, state: FSMContext):
                 text="🗑Удалить шорткат", callback_data=f"shortcut-delete_{shortcut_id}"
             )
         ],
-        [
-            InlineKeyboardButton(
-                text="↩️Назад", callback_data="shortcut-back"
-            )
-        ],
+        [InlineKeyboardButton(text="↩️Назад", callback_data="shortcut-back")],
     ]
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -1155,17 +1218,13 @@ async def cb_create_shortcut(query: types.CallbackQuery, state: FSMContext):
     await state.update_data(shortcut_mode="create")
     await state.update_data(shortcut_step="command")
 
-    rows = [
-        [
-            InlineKeyboardButton(text="↩️ Назад", callback_data="shortcut-back")
-        ]
-    ]
+    rows = [[InlineKeyboardButton(text="↩️ Назад", callback_data="shortcut-back")]]
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
 
     await query.message.edit_text(
         "Создание нового шортката\n\nВведите команду для шортката (например: /image):",
         parse_mode=ParseMode.HTML,
-        reply_markup=kb
+        reply_markup=kb,
     )
 
 
@@ -1186,7 +1245,9 @@ async def cb_edit_shortcut_command(query: types.CallbackQuery, state: FSMContext
 
     rows = [
         [
-            InlineKeyboardButton(text="↩️ Назад", callback_data=f"shortcut-sel_{shortcut_id}")
+            InlineKeyboardButton(
+                text="↩️ Назад", callback_data=f"shortcut-sel_{shortcut_id}"
+            )
         ]
     ]
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
@@ -1194,9 +1255,8 @@ async def cb_edit_shortcut_command(query: types.CallbackQuery, state: FSMContext
     await query.message.edit_text(
         "Введите новую команду для шортката:",
         parse_mode=ParseMode.HTML,
-        reply_markup=kb
+        reply_markup=kb,
     )
-
 
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("shortcut-edit_instr_"))
@@ -1209,7 +1269,9 @@ async def cb_edit_shortcut_instruction(query: types.CallbackQuery, state: FSMCon
 
     rows = [
         [
-            InlineKeyboardButton(text="↩️ Назад", callback_data=f"shortcut-sel_{shortcut_id}")
+            InlineKeyboardButton(
+                text="↩️ Назад", callback_data=f"shortcut-sel_{shortcut_id}"
+            )
         ]
     ]
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
@@ -1217,9 +1279,8 @@ async def cb_edit_shortcut_instruction(query: types.CallbackQuery, state: FSMCon
     await query.message.edit_text(
         "Введите новую инструкцию для шортката:",
         parse_mode=ParseMode.HTML,
-        reply_markup=kb
+        reply_markup=kb,
     )
-
 
 
 @dp.callback_query(lambda c: c.data and c.data.startswith("shortcut-edit_model_"))
@@ -1229,40 +1290,44 @@ async def cb_edit_shortcut_model(query: types.CallbackQuery, state: FSMContext):
     await state.update_data(shortcut_mode="edit")
     await state.update_data(shortcut_step="model")
     await state.update_data(shortcut_id=shortcut_id)
-    
+
     models = await fetch_models()
     user = await fetch_user(query.from_user.id)
     user_premium = is_user_premium(user)
-    
+
     buttons: list[InlineKeyboardButton] = []
     for m in models:
         model_name = m["name"]
         icons = ""
         if m.get("premium", False) and not user_premium:
             icons = f"🔒{icons}"
-            continue 
+            continue
         if "reasoning" in m["tags"]:
             icons = f"🧠{icons}"
         if "image" in m["tags"]:
             icons = f"🖼️{icons}"
         if m["premium"] == True:
             icons = f"⭐ {icons}"
-        
+
         label = f"{icons} {model_name}"
         buttons.append(
             InlineKeyboardButton(
-                text=label, 
-                callback_data=f"shortcut-model_select_{shortcut_id}_{m['id']}"
+                text=label,
+                callback_data=f"shortcut-model_select_{shortcut_id}_{m['id']}",
             )
         )
-    
+
     rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
-    rows.append([InlineKeyboardButton(text="↩️Отмена", callback_data=f"shortcut-sel_{shortcut_id}")])
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="↩️Отмена", callback_data=f"shortcut-sel_{shortcut_id}"
+            )
+        ]
+    )
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
     await query.message.edit_text(
-        "Выберите модель для шортката:",
-        reply_markup=kb,
-        parse_mode=ParseMode.HTML
+        "Выберите модель для шортката:", reply_markup=kb, parse_mode=ParseMode.HTML
     )
 
 
@@ -1272,21 +1337,24 @@ async def cb_select_shortcut_model(query: types.CallbackQuery, state: FSMContext
     parts = query.data.split("_")
     shortcut_id = parts[2]
     model_id = parts[3]
-    
+
     try:
         await patch_shortcuts(shortcut_id, {"modelId": model_id})
         await query.answer("✅ Модель обновлена", show_alert=True)
-        await shortcuts_edit_answer(query.message, state, user_id=query.from_user.id) 
+        await shortcuts_edit_answer(query.message, state, user_id=query.from_user.id)
     except Exception as e:
         await query.answer(f"❌ Ошибка: {e}", show_alert=True)
 
-async def shortcuts_edit_answer(message: types.Message, state: FSMContext, user_id: int):
+
+async def shortcuts_edit_answer(
+    message: types.Message, state: FSMContext, user_id: int
+):
     try:
         user_shortcuts = await fetch_user_shortcuts(user_id)
     except Exception as e:
         await message.answer(f"Не удалось получить список шорткатов: {e}")
         return
-    
+
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
@@ -1308,15 +1376,16 @@ async def shortcuts_edit_answer(message: types.Message, state: FSMContext, user_
 
     await message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
+
 @dp.callback_query(lambda c: c.data and c.data.startswith("shortcut-delete_"))
 async def cb_delete_shortcut(query: types.CallbackQuery, state: FSMContext):
     await query.answer()
     shortcut_id = query.data.replace("shortcut-delete_", "")
-    
+
     try:
         await delete_shortcuts(shortcut_id)
         await query.answer("✅ Шорткат удалён", show_alert=True)
-        await shortcuts_edit_answer(query.message, state, query.from_user.id) 
+        await shortcuts_edit_answer(query.message, state, query.from_user.id)
     except Exception as e:
         await query.answer(f"❌ Ошибка: {e}", show_alert=True)
 
@@ -1326,23 +1395,28 @@ async def cb_create_shortcut_final(query: types.CallbackQuery, state: FSMContext
     await query.answer()
     parts = query.data.split("_")
     model_id = parts[2]
-    
+
     data = await state.get_data()
     command = data.get("shortcut_command")
     instruction = data.get("shortcut_instruction")
-    
+
     try:
         shortcut_data = {
             "telegramId": query.from_user.id,
             "command": command,
             "instruction": instruction,
-            "modelId": model_id
+            "modelId": model_id,
         }
-        
+
         result = await add_shortcuts(shortcut_data)
         if result:
             await query.answer("✅ Шорткат создан!", show_alert=True)
-            await state.update_data(shortcut_mode=None, shortcut_step=None, shortcut_command=None, shortcut_instruction=None)
+            await state.update_data(
+                shortcut_mode=None,
+                shortcut_step=None,
+                shortcut_command=None,
+                shortcut_instruction=None,
+            )
             await shortcuts_edit_answer(query.message, state, query.from_user.id)
         else:
             await query.answer("❌ Ошибка при создании шортката", show_alert=True)
@@ -1362,34 +1436,8 @@ async def on_model_selected(callback: CallbackQuery):
     kb = build_keyboard(
         models, selected_id=selected_id, user_premium=is_user_premium(user)
     )
-    chat_id = callback.message.chat.id
     await callback.message.edit_reply_markup(reply_markup=kb)
-    chat = await bot.get_chat(chat_id)
-    pinned = chat.pinned_message
-    original = (pinned.text or pinned.caption) if pinned else ""
-    if not pinned:
-        message_to_pin = await callback.bot.send_message(
-            chat_id=chat_id, text=f"📝{model_title}"
-        )
-        await bot.pin_chat_message(
-            chat_id=chat_id,
-            message_id=message_to_pin.message_id,
-            disable_notification=True,
-        )
-    else:
-        if original and "|" in original:
-            base = original.split("|", 1)[1]
-            await bot.edit_message_text(
-                text=f"📝{model_title} |{base}",
-                chat_id=callback.message.chat.id,
-                message_id=pinned.message_id,
-            )
-        else:
-            await bot.edit_message_text(
-                text=f"📝{model_title}",
-                chat_id=callback.message.chat.id,
-                message_id=pinned.message_id,
-            )
+    await change_pin(callback.message.chat.id, model_title, None, callback.bot)
     await callback.answer(text="✅ Модель обновлена", show_alert=False)
 
 
@@ -1648,7 +1696,11 @@ async def message_router(message: types.Message, state: FSMContext):
 
                     rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
                     rows.append(
-                        [InlineKeyboardButton(text="↩️Отмена", callback_data="shortcut-back")]
+                        [
+                            InlineKeyboardButton(
+                                text="↩️Отмена", callback_data="shortcut-back"
+                            )
+                        ]
                     )
                     kb = InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -1812,55 +1864,9 @@ async def message_router(message: types.Message, state: FSMContext):
                                 if selected and selected.get("title")
                                 else response_chat_id[:8]
                             )
-
-                            try:
-                                chat: types.Chat = await bot.get_chat(message.chat.id)
-                                pinned: types.Message | None = getattr(chat, "pinned_message", None)
-                            except Exception as e:
-                                logging.warning("Не удалось получить чат/закреплённое сообщение: %s", e)
-                                pinned = None
-
-                            original = ""
-                            if pinned is not None:
-                                original = getattr(pinned, "text", None) or getattr(pinned, "caption", None) or ""
-
-                            if "|" not in original:
-                                new_text = f"{original} | 💭{chat_title}"
-
-                                if pinned and getattr(pinned, "message_id", None):
-                                    try:
-                                        await bot.edit_message_text(
-                                            text=new_text,
-                                            chat_id=message.chat.id,
-                                            message_id=pinned.message_id,
-                                        )
-                                        await safe_delete_target(target)
-                                        return
-                                    except Exception:
-                                        await safe_delete_target(target)
-                                        return "bad"
-                                else:
-                                    logging.info("Нет pinned.message_id — пропускаем редактирование заголовка.")
-                                    await safe_delete_target(target)
-                                    return
-                            else:
-                                base = original.split("|", 1)[0]
-                                new_text = f"{base}| 💭{chat_title}"
-
-                                if pinned and getattr(pinned, "message_id", None):
-                                    try:
-                                        await bot.edit_message_text(
-                                            text=new_text,
-                                            chat_id=message.chat.id,
-                                            message_id=pinned.message_id,
-                                        )
-                                        await safe_delete_target(target)
-                                    except Exception:
-                                        await safe_delete_target(target)
-                                else:
-                                    logging.info("Нет pinned.message_id — пропускаем редактирование заголовка.")
-                                    await safe_delete_target(target)
-
+                            await change_pin(
+                                message.chat.id, None, chat_title, message.bot
+                            )
                         await state.update_data(active_chat=response_chat_id)
                         raw = result.get("content", "")
 
@@ -1890,7 +1896,9 @@ async def message_router(message: types.Message, state: FSMContext):
                                 )
                                 await safe_delete_target(target)
                                 await message.answer(text=byte_text, reply_markup=kb)
-                                await message.reply(final_text, parse_mode=ParseMode.MARKDOWN_V2)
+                                await message.reply(
+                                    final_text, parse_mode=ParseMode.MARKDOWN_V2
+                                )
                             else:
                                 final_text = clean
                                 await safe_delete_target(target)
@@ -1937,62 +1945,15 @@ async def message_router(message: types.Message, state: FSMContext):
                                 if selected and selected.get("title")
                                 else response_chat_id[:8]
                             )
-
-                            try:
-                                chat: types.Chat = await bot.get_chat(message.chat.id)
-                                pinned: types.Message | None = getattr(chat, "pinned_message", None)
-                            except Exception as e:
-                                logging.warning("Не удалось получить чат/закреплённое сообщение: %s", e)
-                                pinned = None
-
-                            original = ""
-                            if pinned is not None:
-                                original = getattr(pinned, "text", None) or getattr(pinned, "caption", None) or ""
-
-                            if "|" not in original:
-                                new_text = f"{original} | 💭{chat_title}"
-
-                                if pinned and getattr(pinned, "message_id", None):
-                                    try:
-                                        await bot.edit_message_text(
-                                            text=new_text,
-                                            chat_id=message.chat.id,
-                                            message_id=pinned.message_id,
-                                        )
-                                        await safe_delete_target(target)
-                                        return
-                                    except Exception:
-                                        await safe_delete_target(target)
-                                        return "bad"
-                                else:
-                                    logging.info("Нет pinned.message_id — пропускаем редактирование заголовка.")
-                                    await safe_delete_target(target)
-                                    return
-                            else:
-                                base = original.split("|", 1)[0]
-                                new_text = f"{base}| 💭{chat_title}"
-
-                                if pinned and getattr(pinned, "message_id", None):
-                                    try:
-                                        await bot.edit_message_text(
-                                            text=new_text,
-                                            chat_id=message.chat.id,
-                                            message_id=pinned.message_id,
-                                        )
-                                        await safe_delete_target(target)
-                                    except Exception:
-                                        await safe_delete_target(target)
-                                else:
-                                    logging.info("Нет pinned.message_id — пропускаем редактирование заголовка.")
-                                    await safe_delete_target(target)
+                            await change_pin(
+                                message.chat.id, None, chat_title, message.bot
+                            )
                         await state.update_data(active_chat=response_chat_id)
                         raw = result.get("content", "")
-
                         if isinstance(raw, (tuple, list)):
                             raw = raw[0] if raw else ""
                         if not isinstance(raw, str):
                             raw = str(raw) or ""
-
                         if result.get("type") == "image":
                             photo = BufferedInputFile(
                                 base64.b64decode(raw), filename="gen.png"
@@ -2014,7 +1975,9 @@ async def message_router(message: types.Message, state: FSMContext):
                                 )
                                 await safe_delete_target(target)
                                 await message.answer(text=byte_text, reply_markup=kb)
-                                await message.reply(final_text, parse_mode=ParseMode.MARKDOWN_V2)
+                                await message.reply(
+                                    final_text, parse_mode=ParseMode.MARKDOWN_V2
+                                )
                             else:
                                 final_text = clean
                                 await safe_delete_target(target)
@@ -2031,8 +1994,6 @@ async def message_router(message: types.Message, state: FSMContext):
             await message.answer(f"Сетевая ошибка: {e}")
         finally:
             await state.update_data(is_locked=False)
-
-
 
 
 _ZW_MARKER = "\u2063\u2063\u2063"
@@ -2220,8 +2181,8 @@ async def _wait_port_up(port: int, timeout: float = 10.0) -> bool:
 
 async def main():
     sentry_sdk.init(
-    dsn="https://e8b7b18ddf5122642e1be46af0e0af02@o4509825102708736.ingest.de.sentry.io/4509920637812816",
-       send_default_pii=True,
+        dsn="https://e8b7b18ddf5122642e1be46af0e0af02@o4509825102708736.ingest.de.sentry.io/4509920637812816",
+        send_default_pii=True,
     )
     port = int(os.environ.get("PORT", 8000))
 
