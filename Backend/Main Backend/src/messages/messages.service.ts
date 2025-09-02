@@ -209,8 +209,9 @@ export class MessagesService {
       let response;
       try {
         const userSubscriber = user.subscription.find(
-          (sub) => sub.status == 'ACTIVE',
+          (sub) => sub.status == 'ACTIVE' && sub.plan == 'PRO',
         );
+        console.log(userSubscriber);
         response = await axios.post(
           `${this.configService.get<string>('LLM_SERVER_URL')}/llm`,
           {

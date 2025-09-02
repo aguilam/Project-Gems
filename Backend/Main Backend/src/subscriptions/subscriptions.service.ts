@@ -1,12 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
 import { PostHog } from 'posthog-node';
+import { SubscriptionPlan } from '@prisma/client';
 @Injectable()
 export class SubscriptionsService {
   constructor(private prisma: PrismaService) {}
 
   async newSubscription(dto: {
     userId: string;
+    plan: SubscriptionPlan;
     telegramPaymentId: string;
     providerPaymentId: string;
   }) {
@@ -24,18 +26,28 @@ export class SubscriptionsService {
         telegramPaymentId: dto.telegramPaymentId,
         providerPaymentId: dto.providerPaymentId,
         kind: 'PAID',
-        plan: 'PRO',
+        plan: dto.plan,
       },
     });
-
-    client.capture({
-      distinctId: dto.userId,
-      event: 'Purchase Succeeded',
-      properties: {
-        value: 340,
-        currency: 'RUB',
-      },
-    });
+    if (dto.plan == 'PRO') {
+      client.capture({
+        distinctId: dto.userId,
+        event: 'Purchase Succeeded',
+        properties: {
+          value: 500,
+          currency: 'RUB',
+        },
+      });
+    } else if (dto.plan == 'GO') {
+      client.capture({
+        distinctId: dto.userId,
+        event: 'Purchase Succeeded',
+        properties: {
+          value: 350,
+          currency: 'RUB',
+        },
+      });
+    }
 
     await client.shutdown();
 

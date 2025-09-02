@@ -464,24 +464,31 @@ async def edit_chat(chat_id: str, new_title: str) -> dict | None:
 
 PROVIDER_TOKEN = ""
 CURRENCY = "XTR"
-PRICE_MAIN_UNITS = 1
+PRICE_PRO_UNITS = 500
+PRICE_GO_UNITS = 350
 
 
 def offer_keyboard():
+    rows: list[list[InlineKeyboardButton]] = []
+    rows.append([
+        types.InlineKeyboardButton(text="Оформить GO подписку", callback_data="buy_go"),
+        types.InlineKeyboardButton(text="Оформить PRO подписку", callback_data="buy_pro"),
+    ])
+    kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    return kb
+
+def invoice_pro_keyboard():
     kb = InlineKeyboardBuilder()
-    kb.button(text="Перейти к оплате", callback_data="buy_premium")
+    kb.button(text="Оплатить 500 ⭐️", pay=True)
     return kb.as_markup()
 
-
-def invoice_keyboard():
+def invoice_go_keyboard():
     kb = InlineKeyboardBuilder()
-    kb.button(text="Оплатить 1 ⭐️", pay=True)
+    kb.button(text="Оплатить 350 ⭐️", pay=True)
     return kb.as_markup()
-
-
-@dp.callback_query(lambda c: c.data == "buy_premium")
-async def callback_buy_premium(callback: CallbackQuery):
-    if callback.data != "buy_premium":
+@dp.callback_query(lambda c: c.data == "buy_pro")
+async def callback_buy_pro(callback: CallbackQuery):
+    if callback.data != "buy_pro":
         return
 
     await callback.answer()
@@ -493,26 +500,66 @@ async def callback_buy_premium(callback: CallbackQuery):
     except Exception:
         pass
 
-    order_payload = str(uuid.uuid4())
-
-    amount_smallest = int(PRICE_MAIN_UNITS)
+    order_id = str(uuid.uuid4())
+    payload = json.dumps({
+        "order_id": order_id,
+        "plan": "PRO",
+    }, ensure_ascii=False)
+    amount_smallest = int(PRICE_PRO_UNITS)
     prices = [LabeledPrice(label="Pro подписка", amount=amount_smallest)]
 
     short_description = (
-        "Pro подписка — 1000 обычных + 120 премиум вопросов и много много чего ещё."
+        "Pro подписка — 1000 обычных + 120 премиум вопросов и огромное множество дополнительных функций, которые выведут взаимодействие с ботом на новый уровень."
     )
 
     await bot.send_invoice(
         chat_id=callback.from_user.id,
         title="Pro подписка",
         description=short_description,
-        payload=order_payload,
+        payload=payload,
+        provider_token="",  
+        currency=CURRENCY,
+        prices=prices,
+        reply_markup=invoice_pro_keyboard(),
+    )
+
+
+@dp.callback_query(lambda c: c.data == "buy_go")
+async def callback_buy_go(callback: CallbackQuery):
+    if callback.data != "buy_go":
+        return
+
+    await callback.answer()
+
+    try:
+        await callback.message.edit_text(
+            callback.message.text + "\n\nПереходим к оплате…"
+        )
+    except Exception:
+        pass
+
+    order_id = str(uuid.uuid4())
+    payload = json.dumps({
+        "order_id": order_id,
+        "plan": "GO",
+    }, ensure_ascii=False)
+    amount_smallest = int(PRICE_GO_UNITS)
+    prices = [LabeledPrice(label="Go подписка", amount=amount_smallest)]
+
+    short_description = (
+        "Go подписка — 1000 обычных + 120 премиум вопросов и много много чего ещё."
+    )
+
+    await bot.send_invoice(
+        chat_id=callback.from_user.id,
+        title="Go подписка",
+        description=short_description,
+        payload=payload,
         provider_token="",
         currency=CURRENCY,
         prices=prices,
-        reply_markup=invoice_keyboard(),
+        reply_markup=invoice_go_keyboard(),
     )
-
 
 @dp.pre_checkout_query()
 async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery):
@@ -522,14 +569,18 @@ async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery):
 @dp.message(F.successful_payment)
 async def success_payment_handler(message: types.message):
     payment = message.successful_payment
-    order_payload = payment.invoice_payload
-
+    invoice_payload_raw = payment.invoice_payload or ""
+    try:
+        order_payload = json.loads(invoice_payload_raw) if invoice_payload_raw else {}
+    except Exception:
+        order_payload = {"raw_payload": invoice_payload_raw}
     user = await fetch_user(message.from_user.id)
     payment_info = {
         "userId": user.get("id", ""),
         "telegramPaymentId": payment.telegram_payment_charge_id,
         "providerPaymentId": payment.provider_payment_charge_id,
         "orderPayload": order_payload,
+        "plan": order_payload.get("plan") if isinstance(order_payload, dict) else None
     }
 
     try:
@@ -539,7 +590,7 @@ async def success_payment_handler(message: types.message):
             ) as resp:
                 resp.raise_for_status()
         await message.answer(
-            "🥳 Спасибо! Подписка оформлена — вы получили доступ к Pro."
+            "🥳 Спасибо! Подписка оформлена — вы получили доступ к морю возможностей."
         )
     except Exception as e:
         safe_error = str(e).replace("=", "\\=").replace("_", "\\_")
@@ -549,16 +600,22 @@ async def success_payment_handler(message: types.message):
         )
 
 
-@dp.message(Command(commands=["pro", "premium"]))
+@dp.message(Command(commands=["pro", "premium", "go"]))
 async def send_offer(message: types.message):
     text = (
-        "✨ Pro подписка — что вы получите:\n\n"
-        "• 1000 обычных и 120 премиум вопросов\n"
-        "• Доступ к премиум-моделям генерации текста и изображений\n"
-        "• Повышение скорости ответа моделей Llama в 3 раза\n"
-        "• Агентские функции (поиск, улучшенная память, запуск Python, модуль WolframAlpha)\n"
-        "• Получаете новые функции первыми\n\n"
-        "Нажмите «Перейти к оплате», чтобы оформить подписку."
+        "⭐ Go — для тех, кто хочет работать быстрее и умнее\n\n"
+        "Что вы получаете:\n"
+        "• 1000 обычных и 120 премиум-вопросов — задавайте больше и сложнее\n"
+        "• Доступ к премиум-моделям генерации текста и изображений — лучшие результаты без лишних усилий\n"
+        "• Ускорение Llama в 3 раза — экономия времени при обработке запросов\n\n"
+        "✨ Pro — для продвинутых задач и автоматизации:\n"
+        "• Всё из Go, плюс расширенные возможности LLM\n"
+        "• Доступ к интернет-поиску — модель использует свежую информацию из сети\n"
+        "• Улучшенная память между чатами — важные детали сохраняются и используются в будущем\n"
+        "• Выполнение кода в Python-окружении — автоматизация, проверки сценариев, запуск агентов\n"
+        "• WolframAlpha — точные вычисления, графики и научные расчёты\n"
+        "• Новые функции в приоритете для подписчиков\n\n"
+        "Выберите план и нажмите кнопку, чтобы активировать доступ и начать пользоваться всеми преимуществами."
     )
     await message.answer(text=text, reply_markup=offer_keyboard())
 
@@ -694,7 +751,6 @@ async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     mode = data.get("mode")
     telegram_id = query.from_user.id
-    chat_page = data.get("chat_page")
     if mode == "delete":
         await delete_chat(chat_id)
         await query.answer("✅ Чат удалён")
@@ -718,9 +774,11 @@ async def cb_selectchat(query: types.CallbackQuery, state: FSMContext):
         chat_title = (
             selected.get("title") if selected and selected.get("title") else chat_id[:8]
         )
-        await change_pin(query.message.chat.id, None, chat_title, query.message.bot)
+
         await state.update_data(active_chat=chat_id)
-        await query.answer(f"✅ Активный чат: {chat_id}")
+        await show_chats_menu(query, state, mode=None)
+        await change_pin(query.message.chat.id, None, chat_title, query.message.bot)
+        await query.answer(f"✅ Активный чат: {chat_title}")
 
 
 async def fetch_models() -> list:
@@ -1127,6 +1185,9 @@ async def help_form(message: types.Message):
             valid_until = (
                 active_subscription.get("validUntil") if active_subscription else None
             )
+            plan = (
+                active_subscription.get("plan") if active_subscription else None
+            )
             if valid_until:
                 subscription_expired = datetime.fromisoformat(valid_until)
                 subscription_expired_normalized_time = subscription_expired.strftime(
@@ -1134,11 +1195,11 @@ async def help_form(message: types.Message):
                 )
             else:
                 subscription_expired_normalized_time = "-"
-            subscription_name = "Pro"
+            subscription_name = plan
         except Exception:
             subscription_expired = None
             subscription_expired_normalized_time = "-"
-            subscription_name = "Pro"
+            subscription_name = plan
 
     user_model = user.get("defaultModel") or {}
     user_model_name = user_model.get("name", "Unknown")

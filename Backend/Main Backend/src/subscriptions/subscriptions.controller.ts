@@ -1,5 +1,6 @@
 import { Body, Controller, Post } from '@nestjs/common';
 import { SubscriptionsService } from './subscriptions.service';
+import { SubscriptionPlan } from '@prisma/client';
 
 @Controller('subscriptions')
 export class SubscriptionsController {
@@ -10,6 +11,7 @@ export class SubscriptionsController {
     @Body()
     dto: {
       userId: string;
+      plan: SubscriptionPlan;
       telegramPaymentId: string;
       providerPaymentId: string;
     },
