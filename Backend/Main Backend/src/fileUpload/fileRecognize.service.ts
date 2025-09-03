@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import axios from 'axios';
 import { ConfigService } from '@nestjs/config';
-
+import { PostHog } from 'posthog-node';
 export interface FileDTO {
   buffer: string;
   name: string;
@@ -16,7 +16,7 @@ export interface RecognizeResponseDTO {
 @Injectable()
 export class FileRecognizeService {
   constructor(private configService: ConfigService) {}
-  async recognize(byteFile: FileDTO): Promise<string> {
+  async recognize(byteFile: FileDTO): Promise<{ text: string; type: string }> {
     try {
       const axiosConfig = {
         headers: {
@@ -36,15 +36,17 @@ export class FileRecognizeService {
       const { data } = resp;
 
       const { content, type } = data as RecognizeResponseDTO;
+      let text = '';
       if (type === 'pdf') {
-        return `Пользователь предоставил контекст в pdf файле, вот что в ней было.\n${content}`;
+        text = `Пользователь предоставил контекст в pdf файле, вот что в ней было.\n${content}`;
       } else if (type === 'table') {
-        return `Пользователь предоставил контекст в таблице, вот что в ней было.\n${content}`;
+        text = `Пользователь предоставил контекст в таблице, вот что в ней было.\n${content}`;
       } else if (type === 'audio') {
-        return content;
+        text = content;
       } else {
-        return `Пользователь предоставил контекст в текстовых файлах, вот что в них было.\n${content}`;
+        text = `Пользователь предоставил контекст в текстовых файлах, вот что в них было.\n${content}`;
       }
+      return { text: text, type: type };
     } catch (err: any) {
       throw new Error(`Ошибка сервера распознавания файла: ${err}`);
     }

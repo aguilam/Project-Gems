@@ -12,6 +12,7 @@ import { ChatsService } from 'src/chats/chats.service';
 import { FileRecognizeService } from 'src/fileUpload/fileRecognize.service';
 import { OcrService } from 'src/ocr/ocr.service';
 import { ConfigService } from '@nestjs/config';
+import { PostHog } from 'posthog-node';
 export interface FileDTO {
   buffer: string;
   name: string;
@@ -46,6 +47,10 @@ export class MessagesService {
 
   async sentUserMessage(dto: MessageDTO) {
     try {
+      const client = new PostHog(
+        'phc_7dIIXaRO6KyWSjenkV1cJ2xfvDjxgybB0cpLXxna78S',
+        { host: 'https://eu.i.posthog.com' },
+      );
       dto.telegramId = String(dto.telegramId);
       const user = await this.prisma.user.findUnique({
         where: {
@@ -61,7 +66,7 @@ export class MessagesService {
       }
       let fullPrompt = dto.prompt;
       let ocrResult = '';
-      let fileRecognizeResult = '';
+      let fileRecognizeResult: { text: string; type: string };
       let modelId = user.defaultModelId;
       let questionsCost = 0;
       const previousMessages: { content: string; role: string }[] = [];
@@ -123,13 +128,24 @@ export class MessagesService {
       if (dto.image) {
         ocrResult = await this.ocrService.imageOcr(dto.image);
         fullPrompt = `${ocrResult}\n\nЗапрос пользователя:${dto.prompt}`;
+        client.capture({
+          distinctId: user.id,
+          event: 'OCR use',
+        });
       }
 
       if (dto.file) {
         fileRecognizeResult = await this.FileRecognizeService.recognize(
           dto.file,
         );
-        fullPrompt = `${fileRecognizeResult}\n\nЗапрос пользователя:${dto.prompt}`;
+        fullPrompt = `${fileRecognizeResult.text}\n\nЗапрос пользователя:${dto.prompt}`;
+        client.capture({
+          distinctId: user.id,
+          event: 'File recognized',
+          properties: {
+            type: fileRecognizeResult.type,
+          },
+        });
         if (fileRecognizeResult && model.premium !== true) {
           questionsCost++;
         }
