@@ -1978,6 +1978,7 @@ async def message_router(message: types.Message, state: FSMContext):
                         try:
                             err = await resp.json()
                             await message.answer(err.get("message", text))
+
                         except:
                             await message.answer(text)
                         return
@@ -2011,6 +2012,13 @@ async def message_router(message: types.Message, state: FSMContext):
                             )
                         await state.update_data(active_chat=response_chat_id)
                         raw = result.get("content", "")
+                        if not raw:
+                            await safe_delete_target(target)
+                            await message.answer(
+                                "Произошла непредвиденная ошибка: сервер вернул пустой ответ. "
+                                "Попробуйте сменить модель или повторить запрос."
+                            )
+                            return
                         if isinstance(raw, (tuple, list)):
                             raw = raw[0] if raw else ""
                         if not isinstance(raw, str):

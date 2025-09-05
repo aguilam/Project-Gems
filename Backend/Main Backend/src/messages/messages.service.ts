@@ -227,7 +227,6 @@ export class MessagesService {
         const userSubscriber = user.subscription.find(
           (sub) => sub.status == 'ACTIVE' && sub.plan == 'PRO',
         );
-        console.log(userSubscriber);
         response = await axios.post(
           `${this.configService.get<string>('LLM_SERVER_URL')}/llm`,
           {
@@ -262,7 +261,7 @@ export class MessagesService {
         }
       }
       const responseData = response?.data as ResponseDTO | undefined;
-
+      console.log(responseData)
       if (!responseData || typeof responseData.content !== 'string') {
         console.error('LLM returned invalid body', response?.data);
         throw new InternalServerErrorException('LLM вернул некорректный ответ');
