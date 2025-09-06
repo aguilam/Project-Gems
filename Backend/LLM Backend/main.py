@@ -812,8 +812,8 @@ async def providerRouting(request: LLMRequest):
 
     prefix = (
         f"Сейчас {datetime.date.today().isoformat()}, это 100 процентно правильная дата, "
-        "ориентируйся на неё. Если видишь, что ответ пришёл от tool или function, то доверяй ему на 99 процентов. "
-        "Если в сообщениях роли function/tool содержится результат внешнего поиска, считай эти данные актуальными..."
+        "ориентируйся на неё. Если видишь, что ответ пришёл от tool или function, то доверяй ему на 99 процентов"
+        "Если в сообщениях роли function/tool содержится результат внешнего поиска, считай эти данные актуальными и не спорь с ними"
     )
     full_messages = add_prefix_if_first_is_system(full_messages, prefix)
     selected_messages = full_messages[0]

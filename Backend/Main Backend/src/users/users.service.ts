@@ -2,6 +2,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
 import { PostHog } from 'posthog-node';
+import { ConfigService } from '@nestjs/config';
 export class User {
   telegramId: string;
   username?: string;
@@ -14,13 +15,15 @@ export class UpdateUserDto {
 }
 @Injectable()
 export class UsersService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private configService: ConfigService,
+  ) {}
 
   async login(dto: User) {
-    const client = new PostHog(
-      'phc_7dIIXaRO6KyWSjenkV1cJ2xfvDjxgybB0cpLXxna78S',
-      { host: 'https://eu.i.posthog.com' },
-    );
+    const client = new PostHog(this.configService.get<string>('POSTHOG_KEY')!, {
+      host: 'https://eu.i.posthog.com',
+    });
 
     dto.telegramId = String(dto.telegramId);
     const existing_user = await this.prisma.user.findUnique({

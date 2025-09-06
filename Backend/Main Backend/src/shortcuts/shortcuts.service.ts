@@ -21,7 +21,24 @@ export class ShortcutsService {
     modelId: string;
     telegramId: string;
   }) {
-    const forbiddenNames = ['/start', '/chats', '/roles'];
+    const forbiddenNames = [
+      '/trial',
+      '/pro',
+      '/premium',
+      '/agent',
+      '/go',
+      '/chats',
+      '/models',
+      '/model',
+      '/shortcuts',
+      '/help',
+      '/paysupport',
+      '/suggestion',
+      '/bug',
+      '/support',
+      '/profile',
+      '/role',
+    ];
 
     forbiddenNames.forEach((name) => {
       if (name == dto.command) {

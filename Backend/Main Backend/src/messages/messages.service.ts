@@ -48,7 +48,7 @@ export class MessagesService {
   async sentUserMessage(dto: MessageDTO) {
     try {
       const client = new PostHog(
-        'phc_7dIIXaRO6KyWSjenkV1cJ2xfvDjxgybB0cpLXxna78S',
+        this.configService.get<string>('POSTHOG_KEY')!,
         { host: 'https://eu.i.posthog.com' },
       );
       dto.telegramId = String(dto.telegramId);
@@ -261,7 +261,7 @@ export class MessagesService {
         }
       }
       const responseData = response?.data as ResponseDTO | undefined;
-      console.log(responseData)
+      console.log(responseData);
       if (!responseData || typeof responseData.content !== 'string') {
         console.error('LLM returned invalid body', response?.data);
         throw new InternalServerErrorException('LLM вернул некорректный ответ');

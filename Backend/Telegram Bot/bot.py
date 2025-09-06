@@ -252,7 +252,7 @@ async def cmd_start(message: types.Message):
         async with aiohttp.ClientSession() as session:
             async with session.post(f"{API_URL}/user", json=data) as resp:
                 await message.answer(
-                    "Привет! Вот основные команды: \n\n /profile — информация о профиле и оставшихся вопросах \n /models — переключиться на другую ИИ-модель \n /role — сменить роль (системный промпт) для ИИ \n /chats — открыть другой чат или создать новый \n /shortcuts — создать или редактировать шорткат \n /support — сообщить об ошибке, баге или предложении \n /pro - не хватает текущих возможностей и моделей? Попробуйте pro подписку \n\n <b>Чтобы начать — просто напишите ваш запрос!</b>",
+                    "Привет! Вот основные команды: \n\n /profile — информация о профиле и оставшихся вопросах \n /models — переключиться на другую ИИ-модель \n /role — сменить роль (системный промпт) для ИИ \n /chats — открыть другой чат или создать новый \n /shortcuts — создать или редактировать шорткат \n /support — сообщить об ошибке, баге или предложении \n /pro - не хватает текущих возможностей и моделей? Попробуйте pro подписку \n\n <b>Чтобы начать — просто напишите ваш запрос!</b> \n\n Помните, все модели могут ошибаться, просто более передовые это делают реже",
                     parse_mode=ParseMode.HTML,
                 )
                 resp.raise_for_status()
@@ -266,7 +266,7 @@ async def cmd_start(message: types.Message):
                 if user_existing == False:
                     await message.bot.send_message(
                         chat_id=chat_id,
-                        text=f"Как новому пользователю мы предлагаем вам 14 дневный пробный  pro период.",
+                        text=f"Как новому пользователю мы предлагаем вам 14 дневный пробный pro период.",
                         reply_markup=trial_invoice_keyboard(),
                     )
                 return
@@ -708,7 +708,7 @@ async def show_chats_menu(target, state: FSMContext, mode: str = None):
     await state.update_data(mode=mode)
 
 
-@dp.message(Command(commands=["chats"]))
+@dp.message(Command(commands=["chats", "chat"]))
 async def cmd_chats(message: types.Message, state: FSMContext):
     await state.update_data(chat_page=1)
     await show_chats_menu(message, state, mode=None)
@@ -1639,13 +1639,22 @@ def escape_markdown_v2(text: str) -> str:
 
 
 forbidden_commands = {
+    "/trial",
+    "/pro",
+    "/premium",
+    "/agent",
+    "/go",
     "/chats",
     "/models",
-    "/role",
-    "/start",
-    "/pro",
-    "/support",
+    "/model",
     "/shortcuts",
+    "/help",
+    "/paysupport",
+    "/suggestion",
+    "/bug",
+    "/support",
+    "/profile",
+    "/role",
 }
 
 

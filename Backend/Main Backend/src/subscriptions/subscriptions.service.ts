@@ -2,9 +2,13 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
 import { PostHog } from 'posthog-node';
 import { SubscriptionPlan } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
 @Injectable()
 export class SubscriptionsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private configService: ConfigService,
+  ) {}
 
   async newSubscription(dto: {
     userId: string;
@@ -12,10 +16,9 @@ export class SubscriptionsService {
     telegramPaymentId: string;
     providerPaymentId: string;
   }) {
-    const client = new PostHog(
-      'phc_7dIIXaRO6KyWSjenkV1cJ2xfvDjxgybB0cpLXxna78S',
-      { host: 'https://eu.i.posthog.com' },
-    );
+    const client = new PostHog(this.configService.get<string>('POSTHOG_KEY')!, {
+      host: 'https://eu.i.posthog.com',
+    });
     const validUntil = new Date();
     validUntil.setMonth(validUntil.getMonth() + 1);
     await this.prisma.subscription.create({
