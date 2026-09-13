@@ -3,18 +3,18 @@ Full-stack LLM platform monorepository.
 
 The repository includes:
  - **FastAPI backend** processes files and sends requests to LLM providers
- - **NestJS server** the main server of the application and the layer of work with the database. Responds to users, chats, messages, and model context formation
- - **Aiogram Telegram Bot**  for user interaction with the platform via Telegram
+ - **NestJS server** the main server of the application and the layer of work with the database. Responds for users, chats, messages, and model context formation
+ - **Aiogram Telegram Bot** for user interaction with platform via Telegram
 
 ### Main functions
 
 #### Multimodal input
 The system accepts as input:
 
-- text
-- images
-- audio
-- files: txt, pdf, docx, html, xlsx and others
+- Text
+- Images
+- Audio
+- Files: txt, pdf, docx, html, xlsx and others
 
 The files are processed by python service and placed in llm context
 
@@ -23,15 +23,15 @@ This is a easy system for adding information to prompt by /command construct
 
 The user can create their own shortcuts by asking:
 
-- command
-- prompt text
-- preferred model for the request
+- Command
+- Prompt text
+- Preferred model for the request
 
 #### Tools
 The model can use tools based on need. Avaible tools:
-- web search
+- Web search
 - WolframAlpha search
-- reading, adding, and deleting data from memory about user
+- Reading, adding, and deleting data from memory about user
 - Python code execution
 
 The tools are called by the model when necessary
@@ -46,6 +46,7 @@ The type of model is determined through tags, which can also be used to identify
 
 #### Chats
 Chats - give separate context for each conversation
+
 The user can create new conversations, delete them, and switch between existing ones from Telegram bot buttons or commands
 
 #### Reasoning display
